@@ -7,9 +7,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -20,13 +19,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SuggestionChip
-import androidx.compose.material3.SuggestionChipDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -68,8 +69,6 @@ fun ItemFormDialog(
     var openingQty by remember { mutableStateOf("") }
     var lowStock by remember { mutableStateOf(itemToEdit?.low?.toString() ?: "0") }
     var aliases by remember { mutableStateOf(itemToEdit?.aliases ?: "") }
-
-    var pickerField by remember { mutableStateOf<String?>(null) } // "type", "brand", "size", "unit"
 
     // Extract existing values from DB
     val typeSuggestions = remember(allItems) {
@@ -145,50 +144,46 @@ fun ItemFormDialog(
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Type Field with DB suggestions & full picker
-                DatabaseAutocompleteField(
+                // Type Dropdown (ExposedDropdownMenuBox)
+                ExposedDbDropdownField(
                     label = "Type",
                     value = type,
-                    placeholder = "e.g. Pipe, Fitting, Tool",
+                    placeholder = "Select or enter type",
                     onValueChange = { type = it },
-                    dbSuggestions = typeSuggestions,
-                    onOpenFullPicker = { pickerField = "type" }
+                    optionsWithCount = typeSuggestions
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Brand Field with DB suggestions & full picker
-                DatabaseAutocompleteField(
+                // Brand Dropdown (ExposedDropdownMenuBox)
+                ExposedDbDropdownField(
                     label = "Brand",
                     value = brand,
-                    placeholder = "e.g. Bosch, Astral, Tata",
+                    placeholder = "Select or enter brand",
                     onValueChange = { brand = it },
-                    dbSuggestions = brandSuggestions,
-                    onOpenFullPicker = { pickerField = "brand" }
+                    optionsWithCount = brandSuggestions
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Size Field with DB suggestions & full picker
-                DatabaseAutocompleteField(
+                // Size Dropdown (ExposedDropdownMenuBox)
+                ExposedDbDropdownField(
                     label = "Size",
                     value = size,
-                    placeholder = "e.g. 1/2 inch, 10mm, 1L",
+                    placeholder = "Select or enter size",
                     onValueChange = { size = it },
-                    dbSuggestions = sizeSuggestions,
-                    onOpenFullPicker = { pickerField = "size" }
+                    optionsWithCount = sizeSuggestions
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Unit Field with DB suggestions & full picker
-                DatabaseAutocompleteField(
+                // Unit Dropdown (ExposedDropdownMenuBox)
+                ExposedDbDropdownField(
                     label = "Unit",
                     value = unit,
-                    placeholder = "e.g. pcs, kg, box",
+                    placeholder = "Select or enter unit",
                     onValueChange = { unit = it },
-                    dbSuggestions = unitSuggestions,
-                    onOpenFullPicker = { pickerField = "unit" }
+                    optionsWithCount = unitSuggestions
                 )
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -300,111 +295,83 @@ fun ItemFormDialog(
         }
     }
 
-    // Field Picker Dialogs (Shows all distinct items from DB with counts)
-    pickerField?.let { field ->
-        val counts = when (field) {
-            "type" -> typeSuggestions
-            "brand" -> brandSuggestions
-            "size" -> sizeSuggestions
-            "unit" -> unitSuggestions
-            else -> emptyList()
-        }
-
-        ValuePickerDialog(
-            title = "Select ${field.replaceFirstChar { it.uppercase() }} from DB",
-            optionsWithCount = counts,
-            currentValue = when (field) {
-                "type" -> type
-                "brand" -> brand
-                "size" -> size
-                "unit" -> unit
-                else -> ""
-            },
-            onSelect = { selectedVal ->
-                when (field) {
-                    "type" -> type = selectedVal
-                    "brand" -> brand = selectedVal
-                    "size" -> size = selectedVal
-                    "unit" -> unit = selectedVal.ifBlank { "pcs" }
-                }
-                pickerField = null
-            },
-            onDismiss = { pickerField = null }
-        )
-    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DatabaseAutocompleteField(
+private fun ExposedDbDropdownField(
     label: String,
     value: String,
     placeholder: String,
     onValueChange: (String) -> Unit,
-    dbSuggestions: List<Pair<String, Int>>,
-    onOpenFullPicker: () -> Unit
+    optionsWithCount: List<Pair<String, Int>>,
+    modifier: Modifier = Modifier
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+    var expanded by remember { mutableStateOf(false) }
+
+    // Filter options as user types
+    val filteredOptions = remember(optionsWithCount, value) {
+        val q = value.trim().lowercase()
+        if (q.isEmpty()) optionsWithCount
+        else optionsWithCount.filter { it.first.lowercase().contains(q) }
+    }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier.fillMaxWidth()
+    ) {
         OutlinedTextField(
             value = value,
-            onValueChange = onValueChange,
+            onValueChange = {
+                onValueChange(it)
+                expanded = true
+            },
             label = { Text(label) },
             placeholder = { Text(placeholder) },
             singleLine = true,
             trailingIcon = {
-                IconButton(onClick = onOpenFullPicker) {
-                    Icon(
-                        imageVector = Icons.Default.ArrowDropDown,
-                        contentDescription = "Select $label from DB"
-                    )
-                }
+                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
             },
-            modifier = Modifier.fillMaxWidth()
+            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor()
         )
 
-        // Show horizontal scrollable chips from Database
-        if (dbSuggestions.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(4.dp))
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 2.dp)
+        if (filteredOptions.isNotEmpty()) {
+            ExposedDropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+                modifier = Modifier.heightIn(max = 240.dp)
             ) {
-                // Show top 6 most used values from DB
-                items(dbSuggestions.take(6)) { (sugValue, count) ->
-                    val isSelected = sugValue.equals(value.trim(), ignoreCase = true)
-                    SuggestionChip(
-                        onClick = { onValueChange(sugValue) },
-                        label = {
-                            Text(
-                                text = if (count > 0) "$sugValue ($count)" else sugValue,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                            )
-                        },
-                        colors = SuggestionChipDefaults.suggestionChipColors(
-                            containerColor = if (isSelected) BrandBlue.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            labelColor = if (isSelected) BrandBlue else MaterialTheme.colorScheme.onSurface
-                        )
-                    )
-                }
-
-                // If more than 6, show a "All (N) ▾" chip to open the full list
-                if (dbSuggestions.size > 6) {
-                    item {
-                        SuggestionChip(
-                            onClick = onOpenFullPicker,
-                            label = {
+                filteredOptions.forEach { (option, count) ->
+                    DropdownMenuItem(
+                        text = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Text(
-                                    text = "All ${dbSuggestions.size} from DB ▾",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = BrandBlue,
-                                    fontWeight = FontWeight.SemiBold
+                                    text = option,
+                                    fontWeight = if (option.equals(value.trim(), ignoreCase = true)) FontWeight.Bold else FontWeight.Normal
                                 )
+                                if (count > 0) {
+                                    Text(
+                                        text = "$count in DB",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
-                        )
-                    }
+                        },
+                        onClick = {
+                            onValueChange(option)
+                            expanded = false
+                        },
+                        contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                    )
                 }
             }
         }

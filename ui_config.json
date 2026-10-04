@@ -6,8 +6,8 @@
     "tagline": "Real-time Inventory & Smart Billing"
   },
   "announcement": {
-    "enabled": true,
-    "message": "Welcome to Hardware Stock Manager! Server-Driven UI & Cloud Sync active.",
+    "enabled": false,
+    "message": "",
     "severity": "info",
     "dismissible": true
   },

@@ -51,7 +51,19 @@ class AppUpdateManager(private val context: Context) {
     companion object {
         private const val TAG = "AppUpdateManager"
         private const val GITHUB_RELEASE_API = "https://api.github.com/repos/ARIF683/Hardware/releases/latest"
-        const val CURRENT_VERSION_TAG = "v1.0.0"
+        val CURRENT_VERSION_TAG = "v${BuildConfig.VERSION_NAME}"
+        val CURRENT_VERSION_DISPLAY = "v${BuildConfig.VERSION_NAME} (b${BuildConfig.VERSION_CODE})"
+    }
+
+    private fun parseRemoteVersionCode(tag: String, name: String, notes: String): Int? {
+        val codeRegex = Regex("""(?:version_code|versionCode)[:\s=]+(\d+)""", RegexOption.IGNORE_CASE)
+        codeRegex.find(notes)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+        codeRegex.find(name)?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+
+        val tagRegex = Regex("""v?(?:[0-9]+\.[0-9]+\.)?(\d+)$""", RegexOption.IGNORE_CASE)
+        tagRegex.find(tag.trim())?.groupValues?.get(1)?.toIntOrNull()?.let { return it }
+
+        return null
     }
 
     suspend fun checkForUpdates(): ReleaseInfo? = withContext(Dispatchers.IO) {
@@ -95,8 +107,16 @@ class AppUpdateManager(private val context: Context) {
                 }
 
                 if (downloadUrl.isNotEmpty()) {
-                    // Check if newer: if tag is "latest" or different from current version tag
-                    val isNewer = tagName.isNotEmpty() && tagName != CURRENT_VERSION_TAG
+                    val currentCode = BuildConfig.VERSION_CODE
+                    val remoteCode = parseRemoteVersionCode(tagName, name, notes)
+
+                    val isNewer = if (remoteCode != null) {
+                        remoteCode > currentCode
+                    } else {
+                        val installedTag = "v${BuildConfig.VERSION_NAME}"
+                        tagName.isNotBlank() && tagName != installedTag && !tagName.equals("latest", ignoreCase = true)
+                    }
+
                     val info = ReleaseInfo(
                         tagName = tagName,
                         title = name,

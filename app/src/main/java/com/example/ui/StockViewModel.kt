@@ -49,6 +49,7 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
 
     val uiConfig: StateFlow<DynamicUiConfig> = dynamicUiManager.uiConfig
     val isUiConfigRefreshing: StateFlow<Boolean> = dynamicUiManager.isRefreshing
+    val lastUiSyncedTime: StateFlow<Long> = dynamicUiManager.lastSyncedTime
     val updateStatus: StateFlow<UpdateStatus> = appUpdateManager.status
 
     val isAnnouncementDismissed = MutableStateFlow(false)

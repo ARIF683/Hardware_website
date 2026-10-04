@@ -58,12 +58,15 @@ import com.example.ui.theme.BrandBlue
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningAmber
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
+import com.example.BuildConfig
 import com.example.data.remote.UpdateStatus
 
 @Composable
@@ -76,6 +79,7 @@ fun SettingsScreen(viewModel: StockViewModel) {
     val allItems by viewModel.allItems.collectAsState()
     val uiConfig by viewModel.uiConfig.collectAsState()
     val isUiConfigRefreshing by viewModel.isUiConfigRefreshing.collectAsState()
+    val lastUiSyncedTime by viewModel.lastUiSyncedTime.collectAsState()
     val updateStatus by viewModel.updateStatus.collectAsState()
 
     var showAdminPinDialog by remember { mutableStateOf(false) }
@@ -177,9 +181,9 @@ fun SettingsScreen(viewModel: StockViewModel) {
                             Column {
                                 Text("Dynamic UI (No download)", fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    "Synced with ui_config.json on GitHub",
+                                    if (lastUiSyncedTime > 0) "Synced with GitHub ✓" else "Synced with ui_config.json on GitHub",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = if (lastUiSyncedTime > 0) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
@@ -188,11 +192,20 @@ fun SettingsScreen(viewModel: StockViewModel) {
                         } else {
                             OutlinedButton(
                                 onClick = { viewModel.refreshUiConfig() },
-                                modifier = Modifier.height(36.dp)
+                                modifier = Modifier.height(36.dp),
+                                colors = if (lastUiSyncedTime > 0) {
+                                    ButtonDefaults.outlinedButtonColors(contentColor = SuccessGreen)
+                                } else {
+                                    ButtonDefaults.outlinedButtonColors()
+                                }
                             ) {
-                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Icon(
+                                    imageVector = if (lastUiSyncedTime > 0) Icons.Default.Check else Icons.Default.Refresh,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
                                 Spacer(modifier = Modifier.width(4.dp))
-                                Text("Sync", style = MaterialTheme.typography.bodySmall)
+                                Text(if (lastUiSyncedTime > 0) "Synced ✓" else "Sync", style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
@@ -218,7 +231,7 @@ fun SettingsScreen(viewModel: StockViewModel) {
                             Column {
                                 Text("In-App APK Updates", fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    "Current version: v1.0.0",
+                                    "Installed: v${BuildConfig.VERSION_NAME} (build ${BuildConfig.VERSION_CODE})",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -229,6 +242,15 @@ fun SettingsScreen(viewModel: StockViewModel) {
                             modifier = Modifier.height(36.dp)
                         ) {
                             Text("Check", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+
+                    if (updateStatus is UpdateStatus.UpToDate) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.CheckCircle, contentDescription = null, tint = SuccessGreen, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("App is up to date", color = SuccessGreen, style = MaterialTheme.typography.bodySmall)
                         }
                     }
 

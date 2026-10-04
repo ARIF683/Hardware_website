@@ -12,12 +12,16 @@ android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
+  val buildNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: System.getenv("BUILD_NUMBER"))?.toIntOrNull() ?: 2
+  val dynamicVersionCode = (System.getenv("VERSION_CODE"))?.toIntOrNull() ?: (100 + buildNumber)
+  val dynamicVersionName = (System.getenv("VERSION_NAME")) ?: "1.0.$buildNumber"
+
   defaultConfig {
     applicationId = "com.aistudio.stockmanager.hwkxrt"
     minSdk = 24
     targetSdk = 36
-    versionCode = 1
-    versionName = "1.0"
+    versionCode = dynamicVersionCode
+    versionName = dynamicVersionName
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

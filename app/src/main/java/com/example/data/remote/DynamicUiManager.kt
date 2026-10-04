@@ -35,6 +35,9 @@ class DynamicUiManager(private val context: Context) {
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
+    private val _lastSyncedTime = MutableStateFlow(prefs.getLong("last_synced_time", 0L))
+    val lastSyncedTime: StateFlow<Long> = _lastSyncedTime.asStateFlow()
+
     companion object {
         private const val TAG = "DynamicUiManager"
         private const val CONFIG_URL = "https://raw.githubusercontent.com/ARIF683/Hardware/main/ui_config.json"
@@ -67,7 +70,12 @@ class DynamicUiManager(private val context: Context) {
                     if (!body.isNullOrBlank()) {
                         val parsed = adapter.fromJson(body)
                         if (parsed != null) {
-                            prefs.edit().putString(PREF_KEY_CONFIG, body).apply()
+                            val now = System.currentTimeMillis()
+                            prefs.edit()
+                                .putString(PREF_KEY_CONFIG, body)
+                                .putLong("last_synced_time", now)
+                                .apply()
+                            _lastSyncedTime.value = now
                             _uiConfig.value = parsed
                             Log.d(TAG, "Successfully refreshed dynamic UI config from GitHub: ${parsed.theme.storeTitle}")
                             return@withContext true

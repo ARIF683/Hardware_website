@@ -38,6 +38,10 @@ jobs:
 
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon
+        env:
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          VERSION_CODE: ${{ github.run_number }}
+          VERSION_NAME: "1.0.${{ github.run_number }}"
 
       - name: Prepare APK
         run: |
@@ -47,9 +51,14 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: latest
-          name: "Stock Manager Latest Build"
-          body: "Automatic build from commit ${{ github.sha }}. Download **StockManager.apk** below to install."
+          tag_name: "v1.0.${{ github.run_number }}"
+          name: "Stock Manager v1.0.${{ github.run_number }}"
+          body: |
+            Automatic build from commit ${{ github.sha }}.
+            version_code: ${{ github.run_number }}
+            version_name: 1.0.${{ github.run_number }}
+
+            Download **StockManager.apk** below to install.
           files: release-artifacts/StockManager.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
