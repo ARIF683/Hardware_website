@@ -154,14 +154,69 @@ class SupabaseClient(
     suspend fun insertTransactions(transactions: List<TransactionRecord>): Unit = withContext(Dispatchers.IO) {
         if (transactions.isEmpty()) return@withContext
         val json = txListAdapter.toJson(transactions)
-        val req = newRequestBuilder("transactions?on_conflict=client_id")
-            .addHeader("Prefer", "resolution=ignore-duplicates,return=minimal")
+        
+        // 1. Try plain POST first (standard PostgREST insert without on_conflict to avoid Postgres 42P10 error)
+        var req = newRequestBuilder("transactions")
+            .addHeader("Prefer", "return=minimal")
             .post(json.toRequestBody(jsonMediaType))
             .build()
-        val resp = okHttpClient.newCall(req).execute()
-        if (!resp.isSuccessful) {
-            val err = resp.body?.string() ?: "HTTP ${resp.code}"
-            throw Exception("Failed to insert transactions: $err")
+        var resp = okHttpClient.newCall(req).execute()
+        if (resp.isSuccessful) return@withContext
+
+        val firstErr = resp.body?.string() ?: "HTTP ${resp.code}"
+        Log.w(tag, "First attempt to insert transactions failed: $firstErr. Retrying with fallback payload...")
+
+        // 2. Fallback: If table has id column instead of or in addition to client_id
+        try {
+            val jsonArray = org.json.JSONArray()
+            for (tx in transactions) {
+                val obj = org.json.JSONObject().apply {
+                    put("id", tx.clientId)
+                    put("client_id", tx.clientId)
+                    if (tx.itemId != null) put("item_id", tx.itemId)
+                    put("item_name", tx.itemName)
+                    put("action", tx.action)
+                    put("qty", tx.qty)
+                    put("balance", tx.balance)
+                    put("note", tx.note)
+                    put("unit", tx.unit)
+                    put("created_at", tx.createdAt)
+                }
+                jsonArray.put(obj)
+            }
+            req = newRequestBuilder("transactions")
+                .addHeader("Prefer", "return=minimal")
+                .post(jsonArray.toString().toRequestBody(jsonMediaType))
+                .build()
+            resp = okHttpClient.newCall(req).execute()
+            if (resp.isSuccessful) return@withContext
+
+            // 3. Fallback: Strip client_id completely if Supabase table does not have client_id column
+            val jsonArrayNoClientId = org.json.JSONArray()
+            for (tx in transactions) {
+                val obj = org.json.JSONObject().apply {
+                    if (tx.itemId != null) put("item_id", tx.itemId)
+                    put("item_name", tx.itemName)
+                    put("action", tx.action)
+                    put("qty", tx.qty)
+                    put("balance", tx.balance)
+                    put("note", tx.note)
+                    put("unit", tx.unit)
+                    put("created_at", tx.createdAt)
+                }
+                jsonArrayNoClientId.put(obj)
+            }
+            req = newRequestBuilder("transactions")
+                .addHeader("Prefer", "return=minimal")
+                .post(jsonArrayNoClientId.toString().toRequestBody(jsonMediaType))
+                .build()
+            resp = okHttpClient.newCall(req).execute()
+            if (resp.isSuccessful) return@withContext
+
+            val finalErr = resp.body?.string() ?: "HTTP ${resp.code}"
+            throw Exception("Failed to insert transactions: $finalErr")
+        } catch (e: Exception) {
+            throw Exception("Failed to insert transactions: ${e.message ?: firstErr}")
         }
     }
 

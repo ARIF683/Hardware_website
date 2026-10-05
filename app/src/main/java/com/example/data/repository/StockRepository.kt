@@ -497,6 +497,7 @@ class StockRepository(
     }
 
     suspend fun retrySync() {
+        isFlushing = false
         initRealtime(force = true)
         flushQueue()
     }
