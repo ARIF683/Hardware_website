@@ -13,6 +13,7 @@ val DangerRed = Color(0xFFEF4444)
 val DangerRedLight = Color(0xFFFEE2E2)
 val WarningAmber = Color(0xFFF59E0B)
 val WarningAmberLight = Color(0xFFFEF3C7)
+val BrandAmber = Color(0xFFF59E0B)
 
 val DarkBg = Color(0xFF12141A)
 val DarkSurface = Color(0xFF1E222B)

@@ -49,11 +49,17 @@ import com.example.data.remote.UpdateStatus
 import com.example.ui.NavigationTab
 import com.example.ui.StockViewModel
 import com.example.ui.theme.BrandBlue
+import com.example.ui.theme.BrandAmber
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningAmber
 import java.text.SimpleDateFormat
 import java.util.Locale
+
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Receipt
 
 @Composable
 fun HomeScreen(viewModel: StockViewModel) {
@@ -63,6 +69,8 @@ fun HomeScreen(viewModel: StockViewModel) {
     val updateStatus by viewModel.updateStatus.collectAsState()
     val isAnnouncementDismissed by viewModel.isAnnouncementDismissed.collectAsState()
     val isUpdateBannerDismissed by viewModel.isUpdateBannerDismissed.collectAsState()
+    val quotations by viewModel.allQuotations.collectAsState()
+    val ledgerAccounts by viewModel.allLedgerAccounts.collectAsState()
 
     val totalItems = items.size
     val totalQty = items.sumOf { it.qty }
@@ -252,7 +260,70 @@ fun HomeScreen(viewModel: StockViewModel) {
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(14.dp))
+        }
+
+        // Quick Actions Grid (Estimates, Khata, Bill Entry, Items)
+        item {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Estimates shortcut
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = BrandBlue.copy(alpha = 0.1f)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { viewModel.navigateTo(NavigationTab.QUOTATIONS) }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(Icons.Default.Description, contentDescription = null, tint = BrandBlue, modifier = Modifier.size(22.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Quotes (${quotations.size})", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = BrandBlue)
+                    }
+                }
+
+                // Khata / Ledger shortcut
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF16A34A).copy(alpha = 0.1f)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { viewModel.navigateTo(NavigationTab.LEDGER) }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = Color(0xFF16A34A), modifier = Modifier.size(22.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("Khata (${ledgerAccounts.size})", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF16A34A))
+                    }
+                }
+
+                // Bill Flow shortcut
+                Card(
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(containerColor = BrandAmber.copy(alpha = 0.12f)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { viewModel.openBillFlow() }
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(Icons.Default.Receipt, contentDescription = null, tint = BrandAmber, modifier = Modifier.size(22.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("+ Bill", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = BrandAmber)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(14.dp))
         }
 
         if (lowStockCount > 0 && uiConfig.features.showLowStockAlert) {

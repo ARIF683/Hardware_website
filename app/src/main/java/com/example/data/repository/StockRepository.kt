@@ -566,4 +566,136 @@ class StockRepository(
             isFlushing = false
         }
     }
+
+    // ==================== QUOTATIONS / ESTIMATES ====================
+    val allQuotations: Flow<List<com.example.data.model.QuotationRecord>> = database.quotationDao().getAllQuotations()
+
+    suspend fun saveQuotation(quotation: com.example.data.model.QuotationRecord) = withContext(Dispatchers.IO) {
+        database.quotationDao().insert(quotation)
+    }
+
+    suspend fun deleteQuotation(id: String) = withContext(Dispatchers.IO) {
+        database.quotationDao().deleteById(id)
+    }
+
+    /**
+     * Converts an accepted Quotation into a confirmed Sale:
+     * 1. Marks Quotation status as "Converted"
+     * 2. Automatically deducts items from stock (Stock OUT)
+     * 3. Creates transaction records and queues sync
+     */
+    suspend fun convertQuotationToSale(quotation: com.example.data.model.QuotationRecord): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val items = com.example.util.InvoicePrintManager.parseLineItems(quotation.itemsJson)
+            val updatedQuot = quotation.copy(status = "Converted")
+            database.quotationDao().insert(updatedQuot)
+
+            val now = nowIso()
+            val txList = mutableListOf<TransactionRecord>()
+            val itemsToUpdate = mutableListOf<Item>()
+
+            for (lineItem in items) {
+                if (lineItem.itemId != null) {
+                    val existing = database.itemDao().getItemByIdOnce(lineItem.itemId)
+                    if (existing != null) {
+                        val newQty = existing.qty - lineItem.qty
+                        val updatedItem = existing.copy(qty = newQty, updatedAt = now)
+                        itemsToUpdate.add(updatedItem)
+
+                        val tx = TransactionRecord(
+                            clientId = UUID.randomUUID().toString(),
+                            itemId = existing.id,
+                            itemName = existing.name,
+                            action = "out",
+                            qty = lineItem.qty,
+                            balance = newQty,
+                            note = "Sale Est #${quotation.quotationNo} (${quotation.customerName})",
+                            unit = existing.unit,
+                            createdAt = now
+                        )
+                        txList.add(tx)
+                    }
+                }
+            }
+
+            if (itemsToUpdate.isNotEmpty()) {
+                database.itemDao().insertAll(itemsToUpdate)
+                enqueueOp("upsert", itemListAdapter.toJson(itemsToUpdate))
+            }
+            if (txList.isNotEmpty()) {
+                database.transactionDao().insertAll(txList)
+                enqueueOp("tx", txListAdapter.toJson(txList))
+            }
+
+            flushQueue()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to convert quotation to sale", e)
+            Result.failure(e)
+        }
+    }
+
+    // ==================== LEDGER / KHATA ====================
+    val allLedgerAccounts: Flow<List<com.example.data.model.LedgerAccount>> = database.ledgerDao().getAllAccounts()
+
+    fun getEntriesForAccount(accountId: String): Flow<List<com.example.data.model.LedgerEntry>> {
+        return database.ledgerDao().getEntriesForAccount(accountId)
+    }
+
+    suspend fun saveLedgerAccount(account: com.example.data.model.LedgerAccount) = withContext(Dispatchers.IO) {
+        database.ledgerDao().insertAccount(account)
+    }
+
+    suspend fun deleteLedgerAccount(id: String) = withContext(Dispatchers.IO) {
+        database.ledgerDao().deleteEntriesForAccount(id)
+        database.ledgerDao().deleteAccountById(id)
+    }
+
+    suspend fun addLedgerEntry(
+        accountId: String,
+        type: String, // "GAVE" (Debit) or "GOT" (Credit)
+        amount: Double,
+        date: String,
+        description: String,
+        billRef: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val account = database.ledgerDao().getAccountById(accountId)
+                ?: return@withContext Result.failure(Exception("Account not found"))
+
+            // For Customer: GAVE increases balance (they owe you more), GOT decreases balance
+            // For Supplier: GOT increases balance (you owe them more), GAVE decreases balance (you paid them)
+            val newBalance = if (account.type == "SUPPLIER") {
+                if (type == "GOT") account.netBalance + amount else account.netBalance - amount
+            } else {
+                if (type == "GAVE") account.netBalance + amount else account.netBalance - amount
+            }
+
+            val now = nowIso()
+            val entry = com.example.data.model.LedgerEntry(
+                id = UUID.randomUUID().toString(),
+                accountId = accountId,
+                type = type,
+                amount = amount,
+                balanceAfter = newBalance,
+                date = date,
+                description = description,
+                billRef = billRef,
+                createdAt = now
+            )
+
+            val updatedAccount = account.copy(netBalance = newBalance, updatedAt = now)
+            database.ledgerDao().insertEntry(entry)
+            database.ledgerDao().insertAccount(updatedAccount)
+
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to add ledger entry", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteLedgerEntry(entryId: String, accountId: String) = withContext(Dispatchers.IO) {
+        database.ledgerDao().deleteEntryById(entryId)
+    }
 }

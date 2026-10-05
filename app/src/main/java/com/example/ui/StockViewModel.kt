@@ -7,11 +7,17 @@ import com.example.data.auth.AuthManager
 import com.example.data.model.DynamicUiConfig
 import com.example.data.model.Item
 import com.example.data.model.TransactionRecord
+import com.example.data.model.LedgerAccount
+import com.example.data.model.LedgerEntry
+import com.example.data.model.QuotationRecord
+import com.example.data.pref.AppLogoStyle
+import com.example.data.pref.LogoPreferenceManager
 import com.example.data.remote.AppUpdateManager
 import com.example.data.remote.DynamicUiManager
 import com.example.data.remote.UpdateStatus
 import com.example.data.repository.BillRowData
 import com.example.data.repository.StockRepository
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -28,10 +34,11 @@ sealed class CurrentScreen {
     object Main : CurrentScreen()
     data class ItemDetail(val itemId: String) : CurrentScreen()
     object BillFlow : CurrentScreen()
+    data class LedgerAccountDetail(val accountId: String) : CurrentScreen()
 }
 
 enum class NavigationTab {
-    HOME, ITEMS, TRANSACTIONS, SETTINGS
+    HOME, ITEMS, QUOTATIONS, LEDGER, TRANSACTIONS, SETTINGS
 }
 
 data class GroupStat(
@@ -46,6 +53,14 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
     val repository = StockRepository(application)
     val dynamicUiManager = DynamicUiManager(application)
     val appUpdateManager = AppUpdateManager(application)
+    val logoPreferenceManager = LogoPreferenceManager(application)
+
+    val selectedLogo: StateFlow<AppLogoStyle> = logoPreferenceManager.selectedLogo
+
+    fun selectLogo(logo: AppLogoStyle) {
+        logoPreferenceManager.selectLogo(logo)
+        showToast("Logo changed to ${logo.title}")
+    }
 
     val uiConfig: StateFlow<DynamicUiConfig> = dynamicUiManager.uiConfig
     val isUiConfigRefreshing: StateFlow<Boolean> = dynamicUiManager.isRefreshing
@@ -71,6 +86,12 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val recentTransactions: StateFlow<List<TransactionRecord>> = repository.recentTransactions
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allQuotations: StateFlow<List<QuotationRecord>> = repository.allQuotations
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allLedgerAccounts: StateFlow<List<LedgerAccount>> = repository.allLedgerAccounts
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _currentScreen = MutableStateFlow<CurrentScreen>(CurrentScreen.Main)
@@ -459,6 +480,76 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.importItems(items, replace)
             showToast("Imported ${items.size} items")
+        }
+    }
+
+    // ==================== QUOTATION ACTIONS ====================
+    fun saveQuotation(quotation: QuotationRecord) {
+        viewModelScope.launch {
+            repository.saveQuotation(quotation)
+            showToast("Saved Estimate #${quotation.quotationNo}")
+        }
+    }
+
+    fun deleteQuotation(id: String) {
+        viewModelScope.launch {
+            repository.deleteQuotation(id)
+            showToast("Estimate deleted")
+        }
+    }
+
+    fun convertQuotationToSale(quotation: QuotationRecord) {
+        viewModelScope.launch {
+            val result = repository.convertQuotationToSale(quotation)
+            if (result.isSuccess) {
+                showToast("Converted to Sale! Stock deducted & logged ✓")
+            } else {
+                showToast("Failed to convert: ${result.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    // ==================== LEDGER ACTIONS ====================
+    fun saveLedgerAccount(account: LedgerAccount) {
+        viewModelScope.launch {
+            repository.saveLedgerAccount(account)
+            showToast("Saved account: ${account.name}")
+        }
+    }
+
+    fun deleteLedgerAccount(id: String) {
+        viewModelScope.launch {
+            repository.deleteLedgerAccount(id)
+            showToast("Account deleted")
+        }
+    }
+
+    fun addLedgerEntry(
+        accountId: String,
+        type: String,
+        amount: Double,
+        date: String,
+        description: String,
+        billRef: String
+    ) {
+        viewModelScope.launch {
+            val res = repository.addLedgerEntry(accountId, type, amount, date, description, billRef)
+            if (res.isSuccess) {
+                showToast("Ledger entry added ✓")
+            } else {
+                showToast("Error: ${res.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    fun getEntriesForAccount(accountId: String): Flow<List<LedgerEntry>> {
+        return repository.getEntriesForAccount(accountId)
+    }
+
+    fun deleteLedgerEntry(entryId: String, accountId: String) {
+        viewModelScope.launch {
+            repository.deleteLedgerEntry(entryId, accountId)
+            showToast("Entry deleted")
         }
     }
 

@@ -84,3 +84,48 @@ interface SyncQueueDao {
     @Query("SELECT COUNT(*) FROM sync_queue")
     fun getCountFlow(): Flow<Int>
 }
+
+@Dao
+interface QuotationDao {
+    @Query("SELECT * FROM quotations ORDER BY created_at DESC")
+    fun getAllQuotations(): Flow<List<com.example.data.model.QuotationRecord>>
+
+    @Query("SELECT * FROM quotations WHERE id = :id LIMIT 1")
+    suspend fun getQuotationById(id: String): com.example.data.model.QuotationRecord?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(quotation: com.example.data.model.QuotationRecord)
+
+    @Query("DELETE FROM quotations WHERE id = :id")
+    suspend fun deleteById(id: String)
+}
+
+@Dao
+interface LedgerDao {
+    @Query("SELECT * FROM ledger_accounts ORDER BY name ASC")
+    fun getAllAccounts(): Flow<List<com.example.data.model.LedgerAccount>>
+
+    @Query("SELECT * FROM ledger_accounts WHERE type = :type ORDER BY name ASC")
+    fun getAccountsByType(type: String): Flow<List<com.example.data.model.LedgerAccount>>
+
+    @Query("SELECT * FROM ledger_accounts WHERE id = :id LIMIT 1")
+    suspend fun getAccountById(id: String): com.example.data.model.LedgerAccount?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAccount(account: com.example.data.model.LedgerAccount)
+
+    @Query("DELETE FROM ledger_accounts WHERE id = :id")
+    suspend fun deleteAccountById(id: String)
+
+    @Query("SELECT * FROM ledger_entries WHERE account_id = :accountId ORDER BY date DESC, created_at DESC")
+    fun getEntriesForAccount(accountId: String): Flow<List<com.example.data.model.LedgerEntry>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertEntry(entry: com.example.data.model.LedgerEntry)
+
+    @Query("DELETE FROM ledger_entries WHERE id = :id")
+    suspend fun deleteEntryById(id: String)
+
+    @Query("DELETE FROM ledger_entries WHERE account_id = :accountId")
+    suspend fun deleteEntriesForAccount(accountId: String)
+}

@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Settings
@@ -60,7 +62,10 @@ import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.ItemDetailScreen
 import com.example.ui.screens.ItemFormDialog
 import com.example.ui.screens.ItemsScreen
+import com.example.ui.screens.LedgerScreen
+import com.example.ui.screens.QuotationScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.SmoothSplashScreen
 import com.example.ui.screens.StockTransactionDialog
 import com.example.ui.screens.TransactionsScreen
 import com.example.ui.theme.BrandBlue
@@ -82,6 +87,17 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MainAppRoot(viewModel: StockViewModel) {
+    var showSplash by remember { mutableStateOf(true) }
+    val selectedLogo by viewModel.selectedLogo.collectAsState()
+
+    if (showSplash) {
+        SmoothSplashScreen(
+            selectedLogo = selectedLogo,
+            onAnimationFinished = { showSplash = false }
+        )
+        return
+    }
+
     val isAuthed by viewModel.isAuthed.collectAsState()
     val currentScreen by viewModel.currentScreen.collectAsState()
     val currentTab by viewModel.currentTab.collectAsState()
@@ -151,8 +167,10 @@ fun MainAppRoot(viewModel: StockViewModel) {
                 ) {
                     val tabs = listOf(
                         Triple(NavigationTab.HOME, "Home", Icons.Default.Home),
-                        Triple(NavigationTab.ITEMS, "Items", Icons.Default.Inventory2),
-                        Triple(NavigationTab.TRANSACTIONS, "Transactions", Icons.AutoMirrored.Filled.CompareArrows),
+                        Triple(NavigationTab.ITEMS, "Stock", Icons.Default.Inventory2),
+                        Triple(NavigationTab.QUOTATIONS, "Quotes", Icons.Default.Description),
+                        Triple(NavigationTab.LEDGER, "Khata", Icons.Default.AccountBalanceWallet),
+                        Triple(NavigationTab.TRANSACTIONS, "History", Icons.AutoMirrored.Filled.CompareArrows),
                         Triple(NavigationTab.SETTINGS, "Settings", Icons.Default.Settings)
                     )
 
@@ -243,6 +261,20 @@ fun MainAppRoot(viewModel: StockViewModel) {
                     BillScreen(viewModel = viewModel)
                 }
 
+                is CurrentScreen.LedgerAccountDetail -> {
+                    val accounts by viewModel.allLedgerAccounts.collectAsState()
+                    val targetAcc = accounts.find { it.id == screen.accountId }
+                    if (targetAcc != null) {
+                        com.example.ui.screens.LedgerAccountDetailScreen(
+                            account = targetAcc,
+                            viewModel = viewModel,
+                            onBack = { viewModel.navigateTo(NavigationTab.LEDGER) }
+                        )
+                    } else {
+                        LedgerScreen(viewModel = viewModel)
+                    }
+                }
+
                 is CurrentScreen.Main -> {
                     when (currentTab) {
                         NavigationTab.HOME -> HomeScreen(viewModel = viewModel)
@@ -253,6 +285,8 @@ fun MainAppRoot(viewModel: StockViewModel) {
                                 showItemForm = true
                             }
                         )
+                        NavigationTab.QUOTATIONS -> QuotationScreen(viewModel = viewModel)
+                        NavigationTab.LEDGER -> LedgerScreen(viewModel = viewModel)
                         NavigationTab.TRANSACTIONS -> TransactionsScreen(viewModel = viewModel)
                         NavigationTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
                     }

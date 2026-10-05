@@ -55,6 +55,7 @@ import com.example.ui.StockViewModel
 import com.example.ui.components.InputPromptDialog
 import com.example.ui.components.SimpleConfirmDialog
 import com.example.ui.theme.BrandBlue
+import com.example.ui.theme.BrandAmber
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.WarningAmber
@@ -69,6 +70,12 @@ import androidx.compose.material3.LinearProgressIndicator
 import com.example.BuildConfig
 import com.example.data.remote.UpdateStatus
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import com.example.data.pref.AppLogoStyle
+
 @Composable
 fun SettingsScreen(viewModel: StockViewModel) {
     val context = LocalContext.current
@@ -78,6 +85,7 @@ fun SettingsScreen(viewModel: StockViewModel) {
     val isAdmin by viewModel.isAdmin.collectAsState()
     val allItems by viewModel.allItems.collectAsState()
     val uiConfig by viewModel.uiConfig.collectAsState()
+    val selectedLogo by viewModel.selectedLogo.collectAsState()
     val isUiConfigRefreshing by viewModel.isUiConfigRefreshing.collectAsState()
     val lastUiSyncedTime by viewModel.lastUiSyncedTime.collectAsState()
     val updateStatus by viewModel.updateStatus.collectAsState()
@@ -285,6 +293,80 @@ fun SettingsScreen(viewModel: StockViewModel) {
                             )
                         }
                         else -> {}
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // App Logo & Theme Selector
+        item {
+            Card(
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Palette, contentDescription = null, tint = BrandAmber, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Choose App Logo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        }
+                        Text("Active: ${selectedLogo.title}", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    AppLogoStyle.values().forEach { style ->
+                        val isSelected = selectedLogo == style
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (isSelected) BrandBlue.copy(alpha = 0.12f) else Color.Transparent)
+                                .border(
+                                    width = if (isSelected) 1.5.dp else 1.dp,
+                                    color = if (isSelected) BrandBlue else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                                .clickable { viewModel.selectLogo(style) }
+                                .padding(10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                                Image(
+                                    painter = painterResource(id = style.resId),
+                                    contentDescription = style.title,
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(RoundedCornerShape(8.dp)),
+                                    contentScale = ContentScale.Crop
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(style.title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text(style.description, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            if (isSelected) {
+                                Surface(
+                                    color = BrandBlue,
+                                    shape = CircleShape,
+                                    modifier = Modifier.size(22.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Default.Check, contentDescription = "Active", tint = Color.White, modifier = Modifier.size(14.dp))
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
             }
