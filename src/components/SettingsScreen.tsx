@@ -115,6 +115,60 @@ export const SettingsScreen: React.FC = () => {
     }
   };
 
+  const handleImportXlsx = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const data = new Uint8Array(event.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as any[][];
+
+          const itemsList: any[] = [];
+          for (let i = 1; i < json.length; i++) {
+            const row = json[i];
+            if (!row || row.length === 0) continue;
+            const name = row[2] || row[1] || row[0];
+            if (!name || (typeof name === 'string' && name.trim() === '')) continue;
+
+            itemsList.push({
+              id: Math.random().toString(36).substring(2) + Date.now().toString(36),
+              o: i,
+              code: String(row[0] || ''),
+              barcode: String(row[1] || ''),
+              name: String(row[2] || row[0] || ''),
+              cost: Number(row[3] || 0),
+              price: Number(row[4] || 0),
+              type: String(row[5] || ''),
+              brand: String(row[6] || ''),
+              size: String(row[7] || ''),
+              unit: String(row[8] || 'pcs'),
+              mrp: row[9] ? Number(row[9]) : undefined,
+              qty: Number(row[10] || 0),
+              aliases: String(row[11] || ''),
+              low: 0,
+              updatedAt: new Date().toISOString()
+            });
+          }
+
+          if (itemsList.length > 0) {
+            await bulkImportItems(itemsList, replaceOnImport);
+            showToast(`Successfully imported ${itemsList.length} items from Excel!`);
+          } else {
+            showToast('No valid items found in Excel sheet.');
+          }
+        } catch (err) {
+          console.error(err);
+          showToast('Failed to parse Excel file.');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+  };
+
   const handleSaveSupabase = (e: React.FormEvent) => {
     e.preventDefault();
     localStorage.setItem('hardware_supabase_url', supabaseUrl.trim());
@@ -519,6 +573,12 @@ export const SettingsScreen: React.FC = () => {
             <Upload className="w-4 h-4" />
             <span>Restore Backup (JSON)</span>
             <input type="file" accept=".json" onChange={handleImportFile} className="hidden" />
+          </label>
+
+          <label className="flex items-center justify-center gap-2 p-3.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-bold rounded-xl border border-emerald-200 transition-colors cursor-pointer sm:col-span-2">
+            <Upload className="w-4 h-4" />
+            <span>Import Items from Excel (.xlsx / .xls)</span>
+            <input type="file" accept=".xlsx, .xls" onChange={handleImportXlsx} className="hidden" />
           </label>
         </div>
 
