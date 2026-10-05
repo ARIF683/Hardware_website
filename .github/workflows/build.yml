@@ -32,7 +32,10 @@ jobs:
       - name: Prepare build files & debug keystore
         run: |
           touch .env
-          if [ ! -f debug.keystore ]; then
+          if [ -f debug.keystore.base64 ]; then
+            echo "Decoding persistent debug keystore..."
+            base64 -d debug.keystore.base64 > debug.keystore
+          elif [ ! -f debug.keystore ]; then
             keytool -genkeypair -alias androiddebugkey -keypass android -keystore debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 10000 -keyalg RSA -keysize 2048
           fi
 
