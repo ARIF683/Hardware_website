@@ -373,11 +373,26 @@ class StockRepository(
         flushQueue()
     }
 
-    suspend fun deleteAllItems() = withContext(Dispatchers.IO) {
+    suspend fun deleteAllData() = withContext(Dispatchers.IO) {
+        // 1. Delete all local tables
         database.itemDao().deleteAll()
+        database.transactionDao().deleteAll()
+        database.dailyCashflowDao().deleteAll()
+        database.quotationDao().deleteAll()
+        database.ledgerDao().deleteAllAccounts()
+        database.ledgerDao().deleteAllEntries()
+        database.syncQueueDao().deleteAll()
+
+        // 2. Enqueue cloud wipes
         enqueueOp("deleteAll", "{}")
+        enqueueOp("clearTx", "{}")
+        enqueueOp("clearCashflow", "{}")
+        enqueueOp("clearQuotations", "{}")
+        enqueueOp("clearLedger", "{}")
         flushQueue()
     }
+
+    suspend fun deleteAllItems() = deleteAllData()
 
     suspend fun clearTransactionHistory() = withContext(Dispatchers.IO) {
         database.transactionDao().deleteAll()
@@ -586,6 +601,15 @@ class StockRepository(
                         }
                         "clearTx" -> {
                             supabaseClient.clearTransactions()
+                        }
+                        "clearCashflow" -> {
+                            supabaseClient.clearAllCashflow()
+                        }
+                        "clearQuotations" -> {
+                            supabaseClient.clearAllQuotations()
+                        }
+                        "clearLedger" -> {
+                            supabaseClient.clearAllLedger()
                         }
                         "purchase" -> {
                             val pur = purchaseAdapter.fromJson(op.payloadJson)

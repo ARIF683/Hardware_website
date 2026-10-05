@@ -380,6 +380,55 @@ class SupabaseClient(
         }
     }
 
+    suspend fun clearAllCashflow(): Unit = withContext(Dispatchers.IO) {
+        // 1. Wipe purchases
+        try {
+            val req1 = newRequestBuilder("purchases?id=not.is.null").delete().build()
+            okHttpClient.newCall(req1).execute()
+        } catch (e: Exception) {
+            Log.w(tag, "Clear purchases table warning", e)
+        }
+        // 2. Wipe daily_cashflow
+        try {
+            val req2 = newRequestBuilder("daily_cashflow?id=not.is.null").delete().build()
+            okHttpClient.newCall(req2).execute()
+        } catch (e: Exception) {
+            Log.w(tag, "Clear daily_cashflow table warning", e)
+        }
+    }
+
+    suspend fun clearAllQuotations(): Unit = withContext(Dispatchers.IO) {
+        try {
+            val req = newRequestBuilder("quotations?id=not.is.null").delete().build()
+            okHttpClient.newCall(req).execute()
+        } catch (e: Exception) {
+            Log.w(tag, "Clear quotations table warning", e)
+        }
+    }
+
+    suspend fun clearAllLedger(): Unit = withContext(Dispatchers.IO) {
+        try {
+            val req1 = newRequestBuilder("ledger_entries?id=not.is.null").delete().build()
+            okHttpClient.newCall(req1).execute()
+        } catch (e: Exception) {
+            Log.w(tag, "Clear ledger_entries table warning", e)
+        }
+        try {
+            val req2 = newRequestBuilder("ledger_accounts?id=not.is.null").delete().build()
+            okHttpClient.newCall(req2).execute()
+        } catch (e: Exception) {
+            Log.w(tag, "Clear ledger_accounts table warning", e)
+        }
+    }
+
+    suspend fun deleteAllCloudData(): Unit = withContext(Dispatchers.IO) {
+        try { deleteAllItems() } catch (e: Exception) { Log.w(tag, "Delete all items warning", e) }
+        try { clearTransactions() } catch (e: Exception) { Log.w(tag, "Clear transactions warning", e) }
+        try { clearAllCashflow() } catch (e: Exception) { Log.w(tag, "Clear cashflow warning", e) }
+        try { clearAllQuotations() } catch (e: Exception) { Log.w(tag, "Clear quotations warning", e) }
+        try { clearAllLedger() } catch (e: Exception) { Log.w(tag, "Clear ledger warning", e) }
+    }
+
     fun parseItemFromDb(obj: JSONObject): Item {
         val mrpVal = if (obj.has("mrp") && !obj.isNull("mrp")) {
             val v = obj.optDouble("mrp")

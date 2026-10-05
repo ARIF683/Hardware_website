@@ -380,7 +380,8 @@ fun SettingsScreen(viewModel: StockViewModel) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
 
                 SettingActionRow(
-                    title = "Delete all items",
+                    title = "Delete all data (Delete everything)",
+                    subtitle = "Deletes items, sales/expenses, khata & quotations",
                     titleColor = DangerRed,
                     onClick = { showDeleteAllDialog = true }
                 )
@@ -454,14 +455,14 @@ fun SettingsScreen(viewModel: StockViewModel) {
     // Delete All Items Dialog
     if (showDeleteAllDialog) {
         InputPromptDialog(
-            title = "Delete all items",
-            message = "This deletes ALL ${allItems.size} items from the app and the database. Type DELETE to confirm.",
+            title = "Delete everything",
+            message = "This permanently deletes ALL ${allItems.size} items, sales/expenses, khata ledger, and quotations from the app and cloud database. Type DELETE to confirm.",
             placeholder = "Type DELETE",
-            confirmText = "Delete all",
+            confirmText = "Delete everything",
             isDanger = true,
             onConfirm = { text ->
                 if (text.trim() == "DELETE") {
-                    viewModel.deleteAllItems()
+                    viewModel.deleteAllData()
                     showDeleteAllDialog = false
                 } else {
                     viewModel.showToast("Not deleted. You must type DELETE.")

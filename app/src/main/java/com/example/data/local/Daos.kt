@@ -98,6 +98,9 @@ interface QuotationDao {
 
     @Query("DELETE FROM quotations WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    @Query("DELETE FROM quotations")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -117,6 +120,9 @@ interface LedgerDao {
     @Query("DELETE FROM ledger_accounts WHERE id = :id")
     suspend fun deleteAccountById(id: String)
 
+    @Query("DELETE FROM ledger_accounts")
+    suspend fun deleteAllAccounts()
+
     @Query("SELECT * FROM ledger_entries WHERE account_id = :accountId ORDER BY date DESC, created_at DESC")
     fun getEntriesForAccount(accountId: String): Flow<List<com.example.data.model.LedgerEntry>>
 
@@ -131,6 +137,9 @@ interface LedgerDao {
 
     @Query("DELETE FROM ledger_entries WHERE account_id = :accountId")
     suspend fun deleteEntriesForAccount(accountId: String)
+
+    @Query("DELETE FROM ledger_entries")
+    suspend fun deleteAllEntries()
 }
 
 @Dao

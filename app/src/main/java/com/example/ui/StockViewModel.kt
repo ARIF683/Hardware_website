@@ -480,9 +480,13 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
 
     fun deleteAllItems() {
         viewModelScope.launch {
-            repository.deleteAllItems()
-            showToast("All items deleted")
+            repository.deleteAllData()
+            showToast("All data (items, cashflow, khata, quotes) deleted")
         }
+    }
+
+    fun deleteAllData() {
+        deleteAllItems()
     }
 
     fun importItems(items: List<Item>, replace: Boolean) {
