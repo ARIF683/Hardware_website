@@ -211,6 +211,9 @@ class StockRepository(
             val remoteTx = supabaseClient.fetchRecentTransactions(500)
             val remoteCashflow = try { supabaseClient.fetchAllCashflow() } catch (e: Exception) { emptyList() }
 
+            val remoteAccounts = try { supabaseClient.fetchLedgerAccounts() } catch (e: Exception) { emptyList() }
+            val remoteEntries = try { supabaseClient.fetchLedgerEntries() } catch (e: Exception) { emptyList() }
+
             if (remoteItems.isNotEmpty()) {
                 database.itemDao().insertAll(remoteItems)
             }
@@ -219,6 +222,12 @@ class StockRepository(
             }
             if (remoteCashflow.isNotEmpty()) {
                 database.dailyCashflowDao().insertAll(remoteCashflow)
+            }
+            if (remoteAccounts.isNotEmpty()) {
+                database.ledgerDao().insertAllAccounts(remoteAccounts)
+            }
+            if (remoteEntries.isNotEmpty()) {
+                database.ledgerDao().insertAllEntries(remoteEntries)
             }
 
             _syncStatus.value = "Synced ✓"
@@ -733,11 +742,13 @@ class StockRepository(
 
     suspend fun saveLedgerAccount(account: com.example.data.model.LedgerAccount) = withContext(Dispatchers.IO) {
         database.ledgerDao().insertAccount(account)
+        try { supabaseClient.upsertLedgerAccount(account) } catch (e: Exception) { Log.e(tag, "Supabase upsertLedgerAccount failed", e) }
     }
 
     suspend fun deleteLedgerAccount(id: String) = withContext(Dispatchers.IO) {
         database.ledgerDao().deleteEntriesForAccount(id)
         database.ledgerDao().deleteAccountById(id)
+        try { supabaseClient.deleteLedgerAccount(id) } catch (e: Exception) { Log.e(tag, "Supabase deleteLedgerAccount failed", e) }
     }
 
     suspend fun addLedgerEntry(
@@ -777,6 +788,13 @@ class StockRepository(
             database.ledgerDao().insertEntry(entry)
             database.ledgerDao().insertAccount(updatedAccount)
 
+            try {
+                supabaseClient.insertLedgerEntry(entry)
+                supabaseClient.upsertLedgerAccount(updatedAccount)
+            } catch (e: Exception) {
+                Log.e(tag, "Supabase sync ledger entry failed", e)
+            }
+
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(tag, "Failed to add ledger entry", e)
@@ -790,6 +808,15 @@ class StockRepository(
         try {
             database.ledgerDao().insertEntry(updatedEntry)
             recalculateAccountBalanceInternal(updatedEntry.accountId)
+            try {
+                supabaseClient.insertLedgerEntry(updatedEntry)
+                val acc = database.ledgerDao().getAccountById(updatedEntry.accountId)
+                if (acc != null) {
+                    supabaseClient.upsertLedgerAccount(acc)
+                }
+            } catch (e: Exception) {
+                Log.e(tag, "Supabase sync update ledger entry failed", e)
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(tag, "Failed to update ledger entry", e)
@@ -800,6 +827,15 @@ class StockRepository(
     suspend fun deleteLedgerEntry(entryId: String, accountId: String) = withContext(Dispatchers.IO) {
         database.ledgerDao().deleteEntryById(entryId)
         recalculateAccountBalanceInternal(accountId)
+        try {
+            supabaseClient.deleteLedgerEntry(entryId)
+            val acc = database.ledgerDao().getAccountById(accountId)
+            if (acc != null) {
+                supabaseClient.upsertLedgerAccount(acc)
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "Supabase sync delete ledger entry failed", e)
+        }
     }
 
     val allDailyCashflow: Flow<List<com.example.data.model.DailyCashflowRecord>> = database.dailyCashflowDao().getAllCashflow()

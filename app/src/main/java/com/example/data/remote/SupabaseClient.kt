@@ -48,6 +48,14 @@ class SupabaseClient(
         Types.newParameterizedType(List::class.java, DailyCashflowRecord::class.java)
     )
     private val purchaseAdapter = moshi.adapter(PurchaseRecord::class.java)
+    private val ledgerAccountListAdapter = moshi.adapter<List<LedgerAccount>>(
+        Types.newParameterizedType(List::class.java, LedgerAccount::class.java)
+    )
+    private val ledgerEntryListAdapter = moshi.adapter<List<LedgerEntry>>(
+        Types.newParameterizedType(List::class.java, LedgerEntry::class.java)
+    )
+    private val ledgerAccountAdapter = moshi.adapter(LedgerAccount::class.java)
+    private val ledgerEntryAdapter = moshi.adapter(LedgerEntry::class.java)
 
     // Standard HTTP client with timeouts
     private val okHttpClient = OkHttpClient.Builder()
@@ -650,5 +658,65 @@ class SupabaseClient(
 
         webSocket = wsHttpClient.newWebSocket(request, listener)
         return webSocket
+    }
+
+    suspend fun upsertLedgerAccount(account: LedgerAccount): Unit = withContext(Dispatchers.IO) {
+        val json = ledgerAccountAdapter.toJson(account)
+        val req = newRequestBuilder("ledger_accounts?on_conflict=id")
+            .addHeader("Prefer", "resolution=merge-duplicates,return=minimal")
+            .post(json.toRequestBody(jsonMediaType))
+            .build()
+        val resp = okHttpClient.newCall(req).execute()
+        if (!resp.isSuccessful) {
+            val err = resp.body?.string() ?: "HTTP ${resp.code}"
+            throw Exception("Failed to upsert ledger account: $err")
+        }
+    }
+
+    suspend fun deleteLedgerAccount(id: String): Unit = withContext(Dispatchers.IO) {
+        val req = newRequestBuilder("ledger_accounts?id=eq.${java.net.URLEncoder.encode(id, "UTF-8")}")
+            .delete()
+            .build()
+        okHttpClient.newCall(req).execute()
+    }
+
+    suspend fun insertLedgerEntry(entry: LedgerEntry): Unit = withContext(Dispatchers.IO) {
+        val json = ledgerEntryAdapter.toJson(entry)
+        val req = newRequestBuilder("ledger_entries?on_conflict=id")
+            .addHeader("Prefer", "resolution=merge-duplicates,return=minimal")
+            .post(json.toRequestBody(jsonMediaType))
+            .build()
+        val resp = okHttpClient.newCall(req).execute()
+        if (!resp.isSuccessful) {
+            val err = resp.body?.string() ?: "HTTP ${resp.code}"
+            throw Exception("Failed to insert ledger entry: $err")
+        }
+    }
+
+    suspend fun deleteLedgerEntry(id: String): Unit = withContext(Dispatchers.IO) {
+        val req = newRequestBuilder("ledger_entries?id=eq.${java.net.URLEncoder.encode(id, "UTF-8")}")
+            .delete()
+            .build()
+        okHttpClient.newCall(req).execute()
+    }
+
+    suspend fun fetchLedgerAccounts(): List<LedgerAccount> = withContext(Dispatchers.IO) {
+        val req = newRequestBuilder("ledger_accounts?select=*&order=created_at.desc")
+            .get()
+            .build()
+        val resp = okHttpClient.newCall(req).execute()
+        if (!resp.isSuccessful) return@withContext emptyList()
+        val body = resp.body?.string() ?: "[]"
+        ledgerAccountListAdapter.fromJson(body) ?: emptyList()
+    }
+
+    suspend fun fetchLedgerEntries(): List<LedgerEntry> = withContext(Dispatchers.IO) {
+        val req = newRequestBuilder("ledger_entries?select=*&order=created_at.desc")
+            .get()
+            .build()
+        val resp = okHttpClient.newCall(req).execute()
+        if (!resp.isSuccessful) return@withContext emptyList()
+        val body = resp.body?.string() ?: "[]"
+        ledgerEntryListAdapter.fromJson(body) ?: emptyList()
     }
 }

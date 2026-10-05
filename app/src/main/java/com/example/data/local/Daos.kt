@@ -117,6 +117,9 @@ interface LedgerDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAccount(account: com.example.data.model.LedgerAccount)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAllAccounts(accounts: List<com.example.data.model.LedgerAccount>)
+
     @Query("DELETE FROM ledger_accounts WHERE id = :id")
     suspend fun deleteAccountById(id: String)
 
@@ -131,6 +134,9 @@ interface LedgerDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertEntry(entry: com.example.data.model.LedgerEntry)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAllEntries(entries: List<com.example.data.model.LedgerEntry>)
 
     @Query("DELETE FROM ledger_entries WHERE id = :id")
     suspend fun deleteEntryById(id: String)
