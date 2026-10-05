@@ -255,30 +255,41 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         // Search matching
         val trimmedQuery = filters.query.trim()
         if (trimmedQuery.isNotEmpty()) {
-            val cleanQuery = trimmedQuery.lowercase(Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}]+"), "")
-            val tokens = trimmedQuery.lowercase(Locale.ROOT).split(Regex("\\s+")).filter { it.isNotEmpty() }
+            val qLower = trimmedQuery.lowercase(Locale.ROOT)
+            val cleanQuery = qLower.replace(Regex("[^\\p{L}\\p{N}]+"), "")
+            val tokens = qLower.split(Regex("\\s+")).filter { it.isNotEmpty() }
 
             val scored = list.mapNotNull { item: Item ->
-                val nameClean = item.name.lowercase(Locale.ROOT).replace(Regex("[^\\p{L}\\p{N}]+"), "")
-                val hay = listOf(
-                    item.name, item.size, item.brand, item.type,
-                    item.code, item.barcode, item.mrp?.toString() ?: "", item.unit, item.aliases
-                ).joinToString(" ").lowercase(Locale.ROOT)
+                val nameLower = item.name.lowercase(Locale.ROOT)
+                val codeLower = item.code.lowercase(Locale.ROOT)
+                val barcodeLower = item.barcode.lowercase(Locale.ROOT)
+                val typeLower = item.type.lowercase(Locale.ROOT)
+                val brandLower = item.brand.lowercase(Locale.ROOT)
+                val sizeLower = item.size.lowercase(Locale.ROOT)
+                val aliasesLower = item.aliases.lowercase(Locale.ROOT)
+
+                val nameClean = nameLower.replace(Regex("[^\\p{L}\\p{N}]+"), "")
+                val hay = "$nameLower $sizeLower $brandLower $typeLower $codeLower $barcodeLower ${item.mrp ?: ""} ${item.unit} $aliasesLower"
                 val hayClean = hay.replace(Regex("[^\\p{L}\\p{N}]+"), "")
 
                 val score = when {
-                    nameClean.contains(cleanQuery) -> 3
-                    hayClean.contains(cleanQuery) -> 2
-                    tokens.all { hay.contains(it) } -> 1
+                    nameLower == qLower || codeLower == qLower || barcodeLower == qLower -> 100
+                    nameLower.startsWith(qLower) -> 80
+                    nameClean.contains(cleanQuery) && cleanQuery.isNotEmpty() -> 60
+                    nameLower.contains(qLower) -> 50
+                    tokens.all { nameLower.contains(it) } -> 40
+                    codeLower.contains(qLower) || barcodeLower.contains(qLower) -> 35
+                    typeLower.contains(qLower) || brandLower.contains(qLower) || sizeLower.contains(qLower) -> 30
+                    aliasesLower.contains(qLower) -> 25
+                    hayClean.contains(cleanQuery) && cleanQuery.isNotEmpty() -> 20
+                    tokens.all { hay.contains(it) } -> 15
+                    tokens.any { hay.contains(it) } -> 5
                     else -> 0
                 }
                 if (score > 0) Pair(item, score) else null
             }
 
-            val hasHighScore = scored.any { it.second >= 2 }
-            val threshold = if (hasHighScore) 2 else 1
-            scored.filter { it.second >= threshold }
-                .sortedByDescending { it.second }
+            scored.sortedByDescending { it.second }
                 .map { it.first }
         } else {
             list

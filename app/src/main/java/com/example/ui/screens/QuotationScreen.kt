@@ -1,6 +1,11 @@
 package com.example.ui.screens
 
+import android.app.Activity
 import android.content.Context
+import android.content.Intent
+import android.speech.RecognizerIntent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -12,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -29,6 +35,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Print
 import androidx.compose.material.icons.filled.ReceiptLong
@@ -44,6 +51,7 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -507,10 +515,7 @@ fun QuotationFormDialog(
     var taxPercentText by remember { mutableStateOf(existingQuotation?.taxPercent?.toString() ?: "0") }
     var notes by remember { mutableStateOf(existingQuotation?.notes ?: "") }
     var lastSelectedType by remember { mutableStateOf("") }
-
-    val distinctTypes = remember(availableItems) {
-        listOf("All") + availableItems.map { it.type.trim() }.filter { it.isNotEmpty() }.distinct().sorted()
-    }
+    var voiceTargetIdx by remember { mutableStateOf<Int?>(null) }
 
     val lineItems = remember {
         mutableStateListOf<QuotationLineItem>().apply {
@@ -524,6 +529,26 @@ fun QuotationFormDialog(
                 add(QuotationLineItem(name = "", qty = 1.0, unitPrice = 0.0, total = 0.0, type = ""))
             }
         }
+    }
+
+    val speechLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            if (!spoken.isNullOrBlank()) {
+                val target = voiceTargetIdx
+                if (target != null && target in lineItems.indices) {
+                    lineItems[target] = lineItems[target].copy(name = spoken)
+                }
+            }
+        }
+    }
+
+    val distinctTypes = remember(availableItems) {
+        val defaults = listOf("Plumbing", "Electrical", "Hardware", "Sanitary", "Paints", "Tools")
+        val fromDb = availableItems.map { it.type.trim() }.filter { it.isNotEmpty() }
+        listOf("All") + (defaults + fromDb).distinct().sorted()
     }
 
     val subtotal = lineItems.sumOf { it.total }
@@ -540,14 +565,14 @@ fun QuotationFormDialog(
         Surface(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(12.dp),
+                .padding(10.dp),
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surface
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(16.dp)
+                    .padding(14.dp)
             ) {
                 // Dialog Header
                 Row(
@@ -565,7 +590,7 @@ fun QuotationFormDialog(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
 
                 LazyColumn(
                     modifier = Modifier
@@ -622,13 +647,14 @@ fun QuotationFormDialog(
                             Text("LINE ITEMS", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
                             TextButton(
                                 onClick = {
+                                    val rowType = if (lineItems.isNotEmpty() && lineItems.last().type.isNotBlank()) lineItems.last().type else lastSelectedType
                                     lineItems.add(
                                         QuotationLineItem(
                                             name = "",
                                             qty = 1.0,
                                             unitPrice = 0.0,
                                             total = 0.0,
-                                            type = lastSelectedType
+                                            type = rowType
                                         )
                                     )
                                 }
@@ -646,17 +672,31 @@ fun QuotationFormDialog(
                         var isSuggestionsOpen by remember { mutableStateOf(false) }
 
                         val matchingItems = remember(item.name, item.type, availableItems) {
-                            if (item.name.isBlank() && item.type.isBlank()) {
+                            val q = item.name.trim().lowercase(Locale.ROOT)
+                            val curType = item.type.trim()
+                            if (q.isBlank() && curType.isBlank()) {
                                 emptyList()
                             } else {
                                 availableItems.filter { dbItem ->
-                                    val typeMatch = item.type.isBlank() || item.type.equals("All", ignoreCase = true) ||
-                                            dbItem.type.equals(item.type, ignoreCase = true)
-                                    val nameMatch = item.name.isBlank() ||
-                                            dbItem.name.contains(item.name, ignoreCase = true) ||
-                                            dbItem.code.contains(item.name, ignoreCase = true)
-                                    typeMatch && nameMatch
-                                }.take(6)
+                                    val typeMatch = curType.isBlank() || curType.equals("All", ignoreCase = true) ||
+                                            dbItem.type.trim().equals(curType, ignoreCase = true)
+                                    val nameMatch = q.isBlank() ||
+                                            dbItem.name.lowercase(Locale.ROOT).contains(q) ||
+                                            dbItem.code.lowercase(Locale.ROOT).contains(q) ||
+                                            dbItem.barcode.lowercase(Locale.ROOT).contains(q) ||
+                                            dbItem.brand.lowercase(Locale.ROOT).contains(q) ||
+                                            dbItem.type.lowercase(Locale.ROOT).contains(q) ||
+                                            dbItem.aliases.lowercase(Locale.ROOT).contains(q)
+                                    if (curType.isNotBlank() && !curType.equals("All", ignoreCase = true)) {
+                                        typeMatch && nameMatch
+                                    } else {
+                                        nameMatch
+                                    }
+                                }.sortedWith(
+                                    compareByDescending<Item> { dbItem ->
+                                        if (dbItem.name.lowercase(Locale.ROOT).startsWith(q) && q.isNotEmpty()) 2 else 1
+                                    }.thenBy { it.name }
+                                ).take(25)
                             }
                         }
 
@@ -666,7 +706,7 @@ fun QuotationFormDialog(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Column(modifier = Modifier.padding(10.dp)) {
-                                // Item Name Field with instant autocomplete
+                                // Item Name Field with instant autocomplete & Voice Search
                                 Box(modifier = Modifier.fillMaxWidth()) {
                                     OutlinedTextField(
                                         value = item.name,
@@ -674,14 +714,34 @@ fun QuotationFormDialog(
                                             lineItems[idx] = item.copy(name = name)
                                             isSuggestionsOpen = true
                                         },
-                                        label = { Text("Item Name (type to search db)") },
+                                        label = { Text("Item Name (type or speak to search)") },
                                         trailingIcon = {
-                                            if (lineItems.size > 1) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
                                                 IconButton(
-                                                    onClick = { lineItems.removeAt(idx) },
+                                                    onClick = {
+                                                        voiceTargetIdx = idx
+                                                        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                                                            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                                                            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                                                            putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak item name (e.g. Socket, Pipe, Elbow)...")
+                                                        }
+                                                        try {
+                                                            speechLauncher.launch(intent)
+                                                        } catch (e: Exception) {
+                                                            // voice not supported
+                                                        }
+                                                    },
                                                     modifier = Modifier.size(36.dp)
                                                 ) {
-                                                    Icon(Icons.Default.Delete, contentDescription = "Remove", tint = MaterialTheme.colorScheme.error)
+                                                    Icon(Icons.Default.Mic, contentDescription = "Voice search", tint = BrandBlue)
+                                                }
+                                                if (lineItems.size > 1) {
+                                                    IconButton(
+                                                        onClick = { lineItems.removeAt(idx) },
+                                                        modifier = Modifier.size(36.dp)
+                                                    ) {
+                                                        Icon(Icons.Default.Delete, contentDescription = "Remove", tint = MaterialTheme.colorScheme.error)
+                                                    }
                                                 }
                                             }
                                         },
@@ -731,7 +791,18 @@ fun QuotationFormDialog(
                                                         Text(matched.name, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                             if (matched.type.isNotBlank()) {
-                                                                Text("🏷️ ${matched.type}", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary)
+                                                                Surface(
+                                                                    color = BrandBlue.copy(alpha = 0.12f),
+                                                                    shape = RoundedCornerShape(4.dp)
+                                                                ) {
+                                                                    Text(
+                                                                        text = matched.type,
+                                                                        fontSize = 10.sp,
+                                                                        fontWeight = FontWeight.Bold,
+                                                                        color = BrandBlue,
+                                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                    )
+                                                                }
                                                             }
                                                             Text("📦 Stock: ${matched.qty} ${matched.unit}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                                         }
@@ -756,23 +827,43 @@ fun QuotationFormDialog(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Type: ", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(
+                                        text = "Type: ",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                     LazyRow(
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
                                         items(distinctTypes) { tOption ->
-                                            val isSelected = (tOption == "All" && item.type.isBlank()) || item.type.equals(tOption, ignoreCase = true)
+                                            val isSelected = if (tOption.equals("All", ignoreCase = true)) {
+                                                item.type.trim().isEmpty() || item.type.equals("All", ignoreCase = true)
+                                            } else {
+                                                item.type.trim().equals(tOption.trim(), ignoreCase = true)
+                                            }
                                             FilterChip(
                                                 selected = isSelected,
                                                 onClick = {
-                                                    val newType = if (tOption == "All") "" else tOption
+                                                    val newType = if (tOption.equals("All", ignoreCase = true)) "" else tOption
                                                     lineItems[idx] = item.copy(type = newType)
                                                     lastSelectedType = newType
                                                     isSuggestionsOpen = true
                                                 },
-                                                label = { Text(tOption, fontSize = 10.sp) },
-                                                modifier = Modifier.height(26.dp)
+                                                label = {
+                                                    Text(
+                                                        text = tOption,
+                                                        fontSize = 11.sp,
+                                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                                                    )
+                                                },
+                                                colors = FilterChipDefaults.filterChipColors(
+                                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                                    labelColor = MaterialTheme.colorScheme.onSurface,
+                                                    selectedContainerColor = BrandBlue,
+                                                    selectedLabelColor = androidx.compose.ui.graphics.Color.White
+                                                )
                                             )
                                         }
                                     }
@@ -884,21 +975,26 @@ fun QuotationFormDialog(
                     }
                 }
 
-                // Summary & Save Footer
+                // Summary & Save Footer with proper generous padding
                 Surface(
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                    shape = RoundedCornerShape(14.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
                 ) {
                     Row(
-                        modifier = Modifier.padding(12.dp).fillMaxWidth(),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Column {
-                            Text("Subtotal: ₹${String.format(Locale.US, "%.2f", subtotal)}", fontSize = 11.sp)
-                            if (taxAmount > 0) Text("Tax ($taxPercent%): +₹${String.format(Locale.US, "%.2f", taxAmount)}", fontSize = 11.sp)
-                            Text("Grand Total: ₹${String.format(Locale.US, "%.2f", grandTotal)}", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Subtotal: ₹${String.format(Locale.US, "%.2f", subtotal)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (taxAmount > 0) Text("Tax ($taxPercent%): +₹${String.format(Locale.US, "%.2f", taxAmount)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Grand Total: ₹${String.format(Locale.US, "%.2f", grandTotal)}", fontWeight = FontWeight.ExtraBold, fontSize = 15.sp, color = MaterialTheme.colorScheme.primary)
                         }
 
                         Button(
@@ -927,9 +1023,10 @@ fun QuotationFormDialog(
                                 onSave(record)
                             },
                             enabled = customerName.isNotBlank() && lineItems.any { it.name.isNotBlank() },
-                            colors = ButtonDefaults.buttonColors(containerColor = BrandBlue)
+                            colors = ButtonDefaults.buttonColors(containerColor = BrandBlue),
+                            shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("Save Estimate")
+                            Text("Save Estimate", fontWeight = FontWeight.Bold)
                         }
                     }
                 }
