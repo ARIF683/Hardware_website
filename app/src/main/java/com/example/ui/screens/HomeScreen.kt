@@ -275,7 +275,7 @@ fun HomeScreen(viewModel: StockViewModel) {
                     colors = CardDefaults.cardColors(containerColor = BrandBlue.copy(alpha = 0.1f)),
                     modifier = Modifier
                         .weight(1f)
-                        .clickable { viewModel.navigateTo(NavigationTab.QUOTATIONS) }
+                        .clickable { viewModel.navigateToQuotes() }
                 ) {
                     Column(
                         modifier = Modifier.padding(10.dp),
@@ -293,7 +293,7 @@ fun HomeScreen(viewModel: StockViewModel) {
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF16A34A).copy(alpha = 0.1f)),
                     modifier = Modifier
                         .weight(1f)
-                        .clickable { viewModel.navigateTo(NavigationTab.LEDGER) }
+                        .clickable { viewModel.navigateToKhata() }
                 ) {
                     Column(
                         modifier = Modifier.padding(10.dp),

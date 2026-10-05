@@ -38,7 +38,7 @@ sealed class CurrentScreen {
 }
 
 enum class NavigationTab {
-    HOME, ITEMS, QUOTATIONS, LEDGER, TRANSACTIONS, SETTINGS
+    HOME, ITEMS, BILLING, TRANSACTIONS, SETTINGS
 }
 
 data class GroupStat(
@@ -165,6 +165,22 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         selectedGroup.value = null
         selectedItemIds.value = emptySet()
         isSelectionMode.value = false
+    }
+
+    val billingKhataSubTab = MutableStateFlow(0) // 0 = Quotes / Estimates, 1 = Khata Ledger
+
+    fun setBillingKhataSubTab(subTab: Int) {
+        billingKhataSubTab.value = subTab
+    }
+
+    fun navigateToQuotes() {
+        billingKhataSubTab.value = 0
+        navigateTo(NavigationTab.BILLING)
+    }
+
+    fun navigateToKhata() {
+        billingKhataSubTab.value = 1
+        navigateTo(NavigationTab.BILLING)
     }
 
     fun openItemDetail(itemId: String) {

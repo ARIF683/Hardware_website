@@ -59,6 +59,8 @@ import com.example.ui.components.InputPromptDialog
 import com.example.ui.screens.AuthGateScreen
 import com.example.ui.screens.BillScreen
 import com.example.ui.screens.HomeScreen
+import androidx.compose.material.icons.filled.ReceiptLong
+import com.example.ui.screens.BillingHubScreen
 import com.example.ui.screens.ItemDetailScreen
 import com.example.ui.screens.ItemFormDialog
 import com.example.ui.screens.ItemsScreen
@@ -168,8 +170,7 @@ fun MainAppRoot(viewModel: StockViewModel) {
                     val tabs = listOf(
                         Triple(NavigationTab.HOME, "Home", Icons.Default.Home),
                         Triple(NavigationTab.ITEMS, "Stock", Icons.Default.Inventory2),
-                        Triple(NavigationTab.QUOTATIONS, "Quotes", Icons.Default.Description),
-                        Triple(NavigationTab.LEDGER, "Khata", Icons.Default.AccountBalanceWallet),
+                        Triple(NavigationTab.BILLING, "Billing", Icons.Default.ReceiptLong),
                         Triple(NavigationTab.TRANSACTIONS, "History", Icons.AutoMirrored.Filled.CompareArrows),
                         Triple(NavigationTab.SETTINGS, "Settings", Icons.Default.Settings)
                     )
@@ -268,10 +269,10 @@ fun MainAppRoot(viewModel: StockViewModel) {
                         com.example.ui.screens.LedgerAccountDetailScreen(
                             account = targetAcc,
                             viewModel = viewModel,
-                            onBack = { viewModel.navigateTo(NavigationTab.LEDGER) }
+                            onBack = { viewModel.navigateToKhata() }
                         )
                     } else {
-                        LedgerScreen(viewModel = viewModel)
+                        BillingHubScreen(viewModel = viewModel)
                     }
                 }
 
@@ -285,8 +286,7 @@ fun MainAppRoot(viewModel: StockViewModel) {
                                 showItemForm = true
                             }
                         )
-                        NavigationTab.QUOTATIONS -> QuotationScreen(viewModel = viewModel)
-                        NavigationTab.LEDGER -> LedgerScreen(viewModel = viewModel)
+                        NavigationTab.BILLING -> BillingHubScreen(viewModel = viewModel)
                         NavigationTab.TRANSACTIONS -> TransactionsScreen(viewModel = viewModel)
                         NavigationTab.SETTINGS -> SettingsScreen(viewModel = viewModel)
                     }
