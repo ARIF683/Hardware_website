@@ -305,22 +305,17 @@ class SupabaseClient(
             for (rec in records) {
                 val obj = JSONObject().apply {
                     put("client_id", rec.id)
-                    put("id", rec.id)
                     put("supplier", rec.category.ifEmpty { if (rec.type == "SALE") "Counter Sale" else "Purchase Expense" })
-                    put("bill_no", rec.title)
+                    put("bill_no", rec.title.ifEmpty { rec.note })
                     put("bill_date", rec.date)
                     put("total", rec.amount)
-                    put("type", rec.type)
-                    put("category", rec.category)
-                    put("payment_mode", rec.paymentMode)
-                    put("note", rec.note)
                     put("created_at", rec.createdAt)
                     val lines = JSONArray().apply {
                         put(JSONObject().apply {
                             put("qty", 1)
                             put("name", rec.category)
                             put("rate", rec.amount)
-                            put("bill_name", rec.note)
+                            put("bill_name", rec.note.ifEmpty { rec.title })
                         })
                     }
                     put("lines", lines)
@@ -526,16 +521,6 @@ class SupabaseClient(
                                     put("event", "*")
                                     put("schema", "public")
                                     put("table", "items")
-                                })
-                                put(JSONObject().apply {
-                                    put("event", "*")
-                                    put("schema", "public")
-                                    put("table", "daily_cashflow")
-                                })
-                                put(JSONObject().apply {
-                                    put("event", "*")
-                                    put("schema", "public")
-                                    put("table", "purchases")
                                 })
                             }
                             put("postgres_changes", changeArr)
