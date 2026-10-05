@@ -132,3 +132,24 @@ interface LedgerDao {
     @Query("DELETE FROM ledger_entries WHERE account_id = :accountId")
     suspend fun deleteEntriesForAccount(accountId: String)
 }
+
+@Dao
+interface DailyCashflowDao {
+    @Query("SELECT * FROM daily_cashflow ORDER BY date DESC, created_at DESC")
+    fun getAllCashflow(): Flow<List<com.example.data.model.DailyCashflowRecord>>
+
+    @Query("SELECT * FROM daily_cashflow WHERE date LIKE :monthPrefix || '%' ORDER BY date DESC, created_at DESC")
+    fun getCashflowForMonth(monthPrefix: String): Flow<List<com.example.data.model.DailyCashflowRecord>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(record: com.example.data.model.DailyCashflowRecord)
+
+    @Update
+    suspend fun update(record: com.example.data.model.DailyCashflowRecord)
+
+    @Query("DELETE FROM daily_cashflow WHERE id = :id")
+    suspend fun deleteById(id: String)
+
+    @Query("DELETE FROM daily_cashflow")
+    suspend fun deleteAll()
+}

@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.auth.AuthManager
+import com.example.data.model.DailyCashflowRecord
 import com.example.data.model.DynamicUiConfig
 import com.example.data.model.Item
 import com.example.data.model.TransactionRecord
@@ -92,6 +93,9 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val allLedgerAccounts: StateFlow<List<LedgerAccount>> = repository.allLedgerAccounts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val allDailyCashflow: StateFlow<List<DailyCashflowRecord>> = repository.allDailyCashflow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _currentScreen = MutableStateFlow<CurrentScreen>(CurrentScreen.Main)
@@ -588,6 +592,59 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.deleteLedgerEntry(entryId, accountId)
             showToast("Entry deleted")
+        }
+    }
+
+    // Daily Sales & Expenses Cashflow Operations
+    fun addDailyCashflow(
+        type: String, // "SALE" or "EXPENSE"
+        amount: Double,
+        title: String,
+        category: String,
+        paymentMode: String,
+        date: String,
+        note: String
+    ) {
+        viewModelScope.launch {
+            val record = DailyCashflowRecord(
+                id = java.util.UUID.randomUUID().toString(),
+                type = type.uppercase(),
+                amount = amount,
+                title = title.trim(),
+                category = category.trim(),
+                paymentMode = paymentMode.trim().ifBlank { "Cash" },
+                date = date.trim(),
+                note = note.trim(),
+                createdAt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).format(java.util.Date())
+            )
+            val res = repository.addDailyCashflow(record)
+            if (res.isSuccess) {
+                showToast("${if (type == "SALE") "Sale" else "Expense"} of ₹$amount added ✓")
+            } else {
+                showToast("Error adding record: ${res.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    fun updateDailyCashflow(record: DailyCashflowRecord) {
+        viewModelScope.launch {
+            val res = repository.updateDailyCashflow(record)
+            if (res.isSuccess) {
+                showToast("Transaction updated ✓")
+            } else {
+                showToast("Error updating record: ${res.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
+    fun deleteDailyCashflow(id: String) {
+        viewModelScope.launch {
+            val res = repository.deleteDailyCashflow(id)
+            if (res.isSuccess) {
+                showToast("Transaction deleted")
+            } else {
+                showToast("Error deleting: ${res.exceptionOrNull()?.message}")
+            }
         }
     }
 

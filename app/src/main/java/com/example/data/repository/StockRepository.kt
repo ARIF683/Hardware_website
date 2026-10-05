@@ -713,6 +713,42 @@ class StockRepository(
         recalculateAccountBalanceInternal(accountId)
     }
 
+    val allDailyCashflow: Flow<List<com.example.data.model.DailyCashflowRecord>> = database.dailyCashflowDao().getAllCashflow()
+
+    fun getCashflowForMonth(monthPrefix: String): Flow<List<com.example.data.model.DailyCashflowRecord>> {
+        return database.dailyCashflowDao().getCashflowForMonth(monthPrefix)
+    }
+
+    suspend fun addDailyCashflow(record: com.example.data.model.DailyCashflowRecord): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            database.dailyCashflowDao().insert(record)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to insert cashflow record", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateDailyCashflow(record: com.example.data.model.DailyCashflowRecord): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            database.dailyCashflowDao().update(record)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to update cashflow record", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun deleteDailyCashflow(id: String): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            database.dailyCashflowDao().deleteById(id)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to delete cashflow record", e)
+            Result.failure(e)
+        }
+    }
+
     private suspend fun recalculateAccountBalanceInternal(accountId: String) {
         val account = database.ledgerDao().getAccountById(accountId) ?: return
         val entries = database.ledgerDao().getEntriesForAccountOnce(accountId)

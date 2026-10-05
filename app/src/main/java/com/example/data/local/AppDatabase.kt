@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.example.data.model.DailyCashflowRecord
 import com.example.data.model.Item
 import com.example.data.model.LedgerAccount
 import com.example.data.model.LedgerEntry
@@ -18,9 +19,10 @@ import com.example.data.model.TransactionRecord
         SyncQueueItem::class,
         QuotationRecord::class,
         LedgerAccount::class,
-        LedgerEntry::class
+        LedgerEntry::class,
+        DailyCashflowRecord::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -29,6 +31,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun syncQueueDao(): SyncQueueDao
     abstract fun quotationDao(): QuotationDao
     abstract fun ledgerDao(): LedgerDao
+    abstract fun dailyCashflowDao(): DailyCashflowDao
 
     companion object {
         @Volatile
