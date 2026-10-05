@@ -138,34 +138,15 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return list.filter((e) => !e.id.startsWith('entry_1') && !e.id.startsWith('entry_2') && !e.id.startsWith('entry_3') && !e.id.startsWith('entry_4'));
   });
   const [dailyCashflows, setDailyCashflows] = useState<DailyCashflowRecord[]>(() => {
-    const defaultRecords: DailyCashflowRecord[] = [
-      {
-        id: 'cf_app_sale_1',
-        date: '2026-10-04',
-        type: 'SALE',
-        category: 'Counter Sale',
-        amount: 13070,
-        paymentMode: 'Cash',
-        note: '13070 contains',
-        createdAt: '2026-10-04T10:00:00.000Z'
-      },
-      {
-        id: 'cf_app_exp_1',
-        date: '2026-10-05',
-        type: 'EXPENSE',
-        category: 'Transport/Freight',
-        amount: 200,
-        paymentMode: 'Cash',
-        note: 'Transport/Freight',
-        createdAt: '2026-10-05T09:00:00.000Z'
-      }
-    ];
+    const list = loadLocal<DailyCashflowRecord[]>('daily_cashflows', []);
 
-    const list = loadLocal<DailyCashflowRecord[]>('daily_cashflows', defaultRecords);
-
-    // Strip old mock records and auto-imported LED BOX purchase bills
+    // Strip old mock records, auto-imported LED BOX purchase bills, and old pre-uploaded sample records
     const cleaned = list.filter(
       (c) =>
+        c.id !== 'cf_app_sale_1' &&
+        c.id !== 'cf_app_exp_1' &&
+        c.amount !== 13070 &&
+        c.amount !== 200 &&
         !c.id.startsWith('cf_1') &&
         !c.id.startsWith('cf_2') &&
         !c.id.startsWith('cf_3') &&
@@ -178,16 +159,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         !c.note?.includes('LED BOX') &&
         !c.note?.startsWith('Supplier:')
     );
-
-    // Ensure the 13070 sale and 200 expense are present if missing
-    const hasSale13070 = cleaned.some((c) => c.amount === 13070 && c.type === 'SALE');
-    if (!hasSale13070) {
-      cleaned.unshift(defaultRecords[0]);
-    }
-    const hasExp200 = cleaned.some((c) => c.amount === 200 && c.type === 'EXPENSE');
-    if (!hasExp200) {
-      cleaned.unshift(defaultRecords[1]);
-    }
 
     return cleaned;
   });
