@@ -13,6 +13,24 @@ enum class AppLogoStyle(
     val description: String,
     @DrawableRes val resId: Int
 ) {
+    NANO_BANANA_CIRCUIT(
+        id = "nano_banana_circuit",
+        title = "Nano Banana Circuits",
+        description = "Futuristic neon yellow nano banana with microchip tracks",
+        resId = R.drawable.nano_banana_logo_1791185750609
+    ),
+    NANO_BANANA_NODES(
+        id = "nano_banana_nodes",
+        title = "Digital Nano Banana",
+        description = "Connected geometric nodes with glowing sapphire accents",
+        resId = R.drawable.banana_tech_logo_1791185765354
+    ),
+    NANO_BANANA_CYBER(
+        id = "nano_banana_cyber",
+        title = "Cyber 3D Banana Mascot",
+        description = "Sleek 3D cybernetic visor emblem & metallic finish",
+        resId = R.drawable.cyber_banana_logo_1791185780500
+    ),
     OPTION_A(
         id = "option_a",
         title = "Gear & Bolt Hexagon",

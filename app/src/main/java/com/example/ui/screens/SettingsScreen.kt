@@ -7,8 +7,10 @@ import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -96,6 +98,7 @@ fun SettingsScreen(viewModel: StockViewModel) {
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
+    var previewLogoStyle by remember { mutableStateOf<AppLogoStyle?>(null) }
 
     LazyColumn(
         modifier = Modifier
@@ -302,8 +305,8 @@ fun SettingsScreen(viewModel: StockViewModel) {
         // App Logo & Theme Selector
         item {
             Card(
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
@@ -315,12 +318,116 @@ fun SettingsScreen(viewModel: StockViewModel) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Palette, contentDescription = null, tint = BrandAmber, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text("Choose App Logo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            Text("Store Logo & Branding", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                         }
-                        Text("Active: ${selectedLogo.title}", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+                        Text("Active: ${selectedLogo.title}", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Featured Nano Banana Collection Header
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "🍌 Nano Banana Collection",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = BrandAmber
+                        )
+                        Text("Tap card to zoom/preview", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Nano Banana Cards Row
+                    val nanoLogos = listOf(
+                        AppLogoStyle.NANO_BANANA_CIRCUIT,
+                        AppLogoStyle.NANO_BANANA_NODES,
+                        AppLogoStyle.NANO_BANANA_CYBER
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        nanoLogos.forEach { style ->
+                            val isSelected = selectedLogo == style
+                            Card(
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isSelected) BrandBlue.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface
+                                ),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    width = if (isSelected) 2.dp else 1.dp,
+                                    color = if (isSelected) BrandBlue else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clickable { previewLogoStyle = style }
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(8.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally
+                                ) {
+                                    Box {
+                                        Image(
+                                            painter = painterResource(id = style.resId),
+                                            contentDescription = style.title,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .aspectRatio(1f)
+                                                .clip(RoundedCornerShape(8.dp)),
+                                            contentScale = ContentScale.Crop
+                                        )
+                                        if (isSelected) {
+                                            Surface(
+                                                color = BrandBlue,
+                                                shape = CircleShape,
+                                                modifier = Modifier
+                                                    .size(20.dp)
+                                                    .align(Alignment.TopEnd)
+                                                    .padding(2.dp)
+                                            ) {
+                                                Icon(Icons.Default.Check, contentDescription = "Active", tint = Color.White, modifier = Modifier.size(12.dp))
+                                            }
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Text(
+                                        text = style.title,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        color = if (isSelected) BrandBlue else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Button(
+                                        onClick = { viewModel.selectLogo(style) },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(28.dp),
+                                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isSelected) BrandBlue else MaterialTheme.colorScheme.surfaceVariant
+                                        )
+                                    ) {
+                                        Text(
+                                            text = if (isSelected) "Active" else "Select",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (isSelected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("All App Logos", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     AppLogoStyle.values().forEach { style ->
                         val isSelected = selectedLogo == style
@@ -334,7 +441,7 @@ fun SettingsScreen(viewModel: StockViewModel) {
                                     color = if (isSelected) BrandBlue else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
                                     shape = RoundedCornerShape(10.dp)
                                 )
-                                .clickable { viewModel.selectLogo(style) }
+                                .clickable { previewLogoStyle = style }
                                 .padding(10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -344,7 +451,7 @@ fun SettingsScreen(viewModel: StockViewModel) {
                                     painter = painterResource(id = style.resId),
                                     contentDescription = style.title,
                                     modifier = Modifier
-                                        .size(44.dp)
+                                        .size(48.dp)
                                         .clip(RoundedCornerShape(8.dp)),
                                     contentScale = ContentScale.Crop
                                 )
@@ -354,14 +461,24 @@ fun SettingsScreen(viewModel: StockViewModel) {
                                     Text(style.description, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
-                            if (isSelected) {
-                                Surface(
-                                    color = BrandBlue,
-                                    shape = CircleShape,
-                                    modifier = Modifier.size(22.dp)
-                                ) {
-                                    Box(contentAlignment = Alignment.Center) {
-                                        Icon(Icons.Default.Check, contentDescription = "Active", tint = Color.White, modifier = Modifier.size(14.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (isSelected) {
+                                    Surface(
+                                        color = BrandBlue,
+                                        shape = CircleShape,
+                                        modifier = Modifier.size(22.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(Icons.Default.Check, contentDescription = "Active", tint = Color.White, modifier = Modifier.size(14.dp))
+                                        }
+                                    }
+                                } else {
+                                    OutlinedButton(
+                                        onClick = { viewModel.selectLogo(style) },
+                                        modifier = Modifier.height(30.dp),
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)
+                                    ) {
+                                        Text("Set", fontSize = 11.sp)
                                     }
                                 }
                             }
@@ -705,6 +822,86 @@ fun SettingsScreen(viewModel: StockViewModel) {
                             }
                         }) {
                             Text("Import")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // High-Resolution Logo Preview & Selection Dialog
+    previewLogoStyle?.let { style ->
+        val isCurrentlySelected = selectedLogo == style
+        Dialog(onDismissRequest = { previewLogoStyle = null }) {
+            Card(
+                shape = RoundedCornerShape(20.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        text = style.title,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = style.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .aspectRatio(1f)
+                    ) {
+                        Image(
+                            painter = painterResource(id = style.resId),
+                            contentDescription = style.title,
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = { previewLogoStyle = null },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("Close")
+                        }
+                        Button(
+                            onClick = {
+                                viewModel.selectLogo(style)
+                                previewLogoStyle = null
+                                viewModel.showToast("Applied ${style.title} as active store logo!")
+                            },
+                            modifier = Modifier.weight(1.4f),
+                            colors = ButtonDefaults.buttonColors(containerColor = BrandBlue)
+                        ) {
+                            if (isCurrentlySelected) {
+                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Active Logo")
+                            } else {
+                                Text("Apply as Logo")
+                            }
                         }
                     }
                 }
