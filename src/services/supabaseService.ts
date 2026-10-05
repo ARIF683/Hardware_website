@@ -416,6 +416,205 @@ class SupabaseService {
     return true;
   }
 
+  public async fetchQuotations(): Promise<QuotationRecord[]> {
+    try {
+      const resp = await fetch(`${this.url}/rest/v1/quotations?select=*&order=created_at.desc`, {
+        headers: this.getHeaders()
+      });
+      if (!resp.ok) return [];
+      const data = await resp.json();
+      return (data || []).map((row: any) => ({
+        id: String(row.id),
+        quotationNo: String(row.quotation_no || row.quotationNo || ''),
+        customerName: String(row.customer_name || row.customerName || ''),
+        customerPhone: String(row.customer_phone || row.customerPhone || ''),
+        customerAddress: String(row.customer_address || row.customerAddress || ''),
+        date: String(row.date || ''),
+        validUntil: String(row.valid_until || row.validUntil || ''),
+        items: typeof row.items === 'string' ? JSON.parse(row.items) : (row.items || []),
+        subtotal: Number(row.subtotal || 0),
+        discount: Number(row.discount || 0),
+        taxPercent: Number(row.tax_percent || row.taxPercent || 0),
+        taxAmount: Number(row.tax_amount || row.taxAmount || 0),
+        grandTotal: Number(row.grand_total || row.grandTotal || 0),
+        status: (row.status || 'Draft') as any,
+        notes: String(row.notes || ''),
+        createdAt: String(row.created_at || row.createdAt || new Date().toISOString())
+      }));
+    } catch (e) {
+      console.warn('Supabase fetchQuotations failed', e);
+      return [];
+    }
+  }
+
+  public async upsertQuotation(q: QuotationRecord): Promise<void> {
+    try {
+      const payload = {
+        id: q.id,
+        quotation_no: q.quotationNo,
+        customer_name: q.customerName,
+        customer_phone: q.customerPhone,
+        customer_address: q.customerAddress,
+        date: q.date,
+        valid_until: q.validUntil,
+        items: q.items,
+        subtotal: q.subtotal,
+        discount: q.discount,
+        tax_percent: q.taxPercent,
+        tax_amount: q.taxAmount,
+        grand_total: q.grandTotal,
+        status: q.status,
+        notes: q.notes,
+        created_at: q.createdAt
+      };
+      await fetch(`${this.url}/rest/v1/quotations?on_conflict=id`, {
+        method: 'POST',
+        headers: {
+          ...this.getHeaders(),
+          'Prefer': 'resolution=merge-duplicates'
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (e) {
+      console.warn('Supabase upsertQuotation failed', e);
+    }
+  }
+
+  public async deleteQuotationSupabase(id: string): Promise<void> {
+    try {
+      await fetch(`${this.url}/rest/v1/quotations?id=eq.${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: this.getHeaders()
+      });
+    } catch (e) {
+      console.warn('Supabase deleteQuotation failed', e);
+    }
+  }
+
+  public async fetchLedgerAccounts(): Promise<LedgerAccount[]> {
+    try {
+      const resp = await fetch(`${this.url}/rest/v1/ledger_accounts?select=*&order=created_at.desc`, {
+        headers: this.getHeaders()
+      });
+      if (!resp.ok) return [];
+      const data = await resp.json();
+      return (data || []).map((row: any) => ({
+        id: String(row.id),
+        name: String(row.name || ''),
+        phone: String(row.phone || ''),
+        address: String(row.address || ''),
+        type: (row.type || 'CUSTOMER') as any,
+        netBalance: Number(row.net_balance || row.netBalance || 0),
+        creditLimit: Number(row.credit_limit || row.creditLimit || 0),
+        notes: String(row.notes || ''),
+        createdAt: String(row.created_at || row.createdAt || new Date().toISOString()),
+        updatedAt: String(row.updated_at || row.updatedAt || new Date().toISOString())
+      }));
+    } catch (e) {
+      console.warn('Supabase fetchLedgerAccounts failed', e);
+      return [];
+    }
+  }
+
+  public async upsertLedgerAccount(acc: LedgerAccount): Promise<void> {
+    try {
+      const payload = {
+        id: acc.id,
+        name: acc.name,
+        phone: acc.phone,
+        address: acc.address,
+        type: acc.type,
+        net_balance: acc.netBalance,
+        credit_limit: acc.creditLimit,
+        notes: acc.notes,
+        created_at: acc.createdAt,
+        updated_at: acc.updatedAt
+      };
+      await fetch(`${this.url}/rest/v1/ledger_accounts?on_conflict=id`, {
+        method: 'POST',
+        headers: {
+          ...this.getHeaders(),
+          'Prefer': 'resolution=merge-duplicates'
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (e) {
+      console.warn('Supabase upsertLedgerAccount failed', e);
+    }
+  }
+
+  public async deleteLedgerAccountSupabase(id: string): Promise<void> {
+    try {
+      await fetch(`${this.url}/rest/v1/ledger_accounts?id=eq.${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: this.getHeaders()
+      });
+    } catch (e) {
+      console.warn('Supabase deleteLedgerAccount failed', e);
+    }
+  }
+
+  public async fetchLedgerEntries(): Promise<LedgerEntry[]> {
+    try {
+      const resp = await fetch(`${this.url}/rest/v1/ledger_entries?select=*&order=created_at.desc`, {
+        headers: this.getHeaders()
+      });
+      if (!resp.ok) return [];
+      const data = await resp.json();
+      return (data || []).map((row: any) => ({
+        id: String(row.id),
+        accountId: String(row.account_id || row.accountId || ''),
+        type: (row.type || 'GAVE') as any,
+        amount: Number(row.amount || 0),
+        balanceAfter: Number(row.balance_after || row.balanceAfter || 0),
+        date: String(row.date || ''),
+        description: String(row.description || ''),
+        billRef: String(row.bill_ref || row.billRef || ''),
+        createdAt: String(row.created_at || row.createdAt || new Date().toISOString())
+      }));
+    } catch (e) {
+      console.warn('Supabase fetchLedgerEntries failed', e);
+      return [];
+    }
+  }
+
+  public async insertLedgerEntry(entry: LedgerEntry): Promise<void> {
+    try {
+      const payload = {
+        id: entry.id,
+        account_id: entry.accountId,
+        type: entry.type,
+        amount: entry.amount,
+        balance_after: entry.balanceAfter,
+        date: entry.date,
+        description: entry.description,
+        bill_ref: entry.billRef,
+        created_at: entry.createdAt
+      };
+      await fetch(`${this.url}/rest/v1/ledger_entries?on_conflict=id`, {
+        method: 'POST',
+        headers: {
+          ...this.getHeaders(),
+          'Prefer': 'resolution=merge-duplicates'
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (e) {
+      console.warn('Supabase insertLedgerEntry failed', e);
+    }
+  }
+
+  public async deleteLedgerEntrySupabase(id: string): Promise<void> {
+    try {
+      await fetch(`${this.url}/rest/v1/ledger_entries?id=eq.${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: this.getHeaders()
+      });
+    } catch (e) {
+      console.warn('Supabase deleteLedgerEntry failed', e);
+    }
+  }
+
   public async deleteAllData(): Promise<boolean> {
     await this.deleteAllItems();
     await this.clearTransactions();

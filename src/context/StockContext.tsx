@@ -239,10 +239,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const refreshFromSupabase = useCallback(async () => {
     setSupabaseStatus('connecting');
     try {
-      const [remoteItems, remoteTx, remoteCashflows] = await Promise.all([
+      const [remoteItems, remoteTx, remoteCashflows, remoteQuotes, remoteLedgerAccs, remoteLedgerEntries] = await Promise.all([
         supabaseService.fetchAllItems(),
         supabaseService.fetchTransactions(),
-        supabaseService.fetchDailyCashflows()
+        supabaseService.fetchDailyCashflows(),
+        supabaseService.fetchQuotations(),
+        supabaseService.fetchLedgerAccounts(),
+        supabaseService.fetchLedgerEntries()
       ]);
 
       if (remoteItems && remoteItems.length > 0) {
@@ -263,6 +266,18 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           const newRemote = remoteCashflows.filter((c) => !existingIds.has(c.id));
           return [...newRemote, ...prev];
         });
+      }
+
+      if (remoteQuotes && remoteQuotes.length > 0) {
+        setQuotations(remoteQuotes);
+      }
+
+      if (remoteLedgerAccs && remoteLedgerAccs.length > 0) {
+        setLedgerAccounts(remoteLedgerAccs);
+      }
+
+      if (remoteLedgerEntries && remoteLedgerEntries.length > 0) {
+        setLedgerEntries(remoteLedgerEntries);
       }
     } catch (e) {
       console.warn('Could not sync with Supabase, using local cache', e);
@@ -658,17 +673,20 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: new Date().toISOString()
     };
     setQuotations((prev) => [newQuote, ...prev]);
+    supabaseService.upsertQuotation(newQuote).catch((err) => console.error(err));
     showToast(`Quotation ${quotationNo} generated`);
     return newQuote;
   };
 
   const updateQuotation = (quote: QuotationRecord) => {
     setQuotations((prev) => prev.map((q) => (q.id === quote.id ? quote : q)));
+    supabaseService.upsertQuotation(quote).catch((err) => console.error(err));
     showToast(`Quotation ${quote.quotationNo} updated`);
   };
 
   const deleteQuotation = (id: string) => {
     setQuotations((prev) => prev.filter((q) => q.id !== id));
+    supabaseService.deleteQuotationSupabase(id).catch((err) => console.error(err));
     showToast('Quotation deleted');
   };
 
@@ -714,10 +732,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       createdAt: now
     };
     setDailyCashflows((prev) => [cf, ...prev]);
+    supabaseService.upsertCashflow([cf]).catch((err) => console.error(err));
 
+    const convertedQuote = { ...quote, status: 'Converted' as const };
     setQuotations((prev) =>
-      prev.map((q) => (q.id === quoteId ? { ...q, status: 'Converted' } : q))
+      prev.map((q) => (q.id === quoteId ? convertedQuote : q))
     );
+    supabaseService.upsertQuotation(convertedQuote).catch((err) => console.error(err));
 
     showToast(`Quote #${quote.quotationNo} converted to Bill & inventory updated!`);
   };
@@ -737,24 +758,24 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     setLedgerAccounts((prev) => [newAcc, ...prev]);
+    supabaseService.upsertLedgerAccount(newAcc).catch((err) => console.error(err));
 
     if (openingBalance !== 0) {
       const isCustomer = newAcc.type === 'CUSTOMER';
       const entryType = isCustomer ? (openingBalance > 0 ? 'GAVE' : 'GOT') : (openingBalance > 0 ? 'GOT' : 'GAVE');
-      setLedgerEntries((prev) => [
-        {
-          id: `entry_${Date.now()}`,
-          accountId: newAcc.id,
-          type: entryType,
-          amount: Math.abs(openingBalance),
-          balanceAfter: openingBalance,
-          date: now.split('T')[0],
-          description: 'Opening Balance',
-          billRef: '',
-          createdAt: now
-        },
-        ...prev
-      ]);
+      const entry: LedgerEntry = {
+        id: `entry_${Date.now()}`,
+        accountId: newAcc.id,
+        type: entryType,
+        amount: Math.abs(openingBalance),
+        balanceAfter: openingBalance,
+        date: now.split('T')[0],
+        description: 'Opening Balance',
+        billRef: '',
+        createdAt: now
+      };
+      setLedgerEntries((prev) => [entry, ...prev]);
+      supabaseService.insertLedgerEntry(entry).catch((err) => console.error(err));
     }
 
     showToast(`Added ${newAcc.type === 'CUSTOMER' ? 'Customer' : 'Supplier'}: ${newAcc.name}`);
@@ -762,9 +783,11 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const updateLedgerAccount = (updated: LedgerAccount) => {
+    const updatedAcc = { ...updated, updatedAt: new Date().toISOString() };
     setLedgerAccounts((prev) =>
-      prev.map((acc) => (acc.id === updated.id ? { ...updated, updatedAt: new Date().toISOString() } : acc))
+      prev.map((acc) => (acc.id === updated.id ? updatedAcc : acc))
     );
+    supabaseService.upsertLedgerAccount(updatedAcc).catch((err) => console.error(err));
     showToast(`Account updated: ${updated.name}`);
   };
 
@@ -772,6 +795,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const acc = ledgerAccounts.find((a) => a.id === id);
     setLedgerAccounts((prev) => prev.filter((a) => a.id !== id));
     setLedgerEntries((prev) => prev.filter((e) => e.accountId !== id));
+    supabaseService.deleteLedgerAccountSupabase(id).catch((err) => console.error(err));
     showToast(`Deleted account: ${acc?.name || ''}`);
   };
 
@@ -795,10 +819,12 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
     const newBalance = acc.netBalance + balanceDelta;
     const now = new Date().toISOString();
+    const updatedAcc = { ...acc, netBalance: newBalance, updatedAt: now };
 
     setLedgerAccounts((prev) =>
-      prev.map((a) => (a.id === accountId ? { ...a, netBalance: newBalance, updatedAt: now } : a))
+      prev.map((a) => (a.id === accountId ? updatedAcc : a))
     );
+    supabaseService.upsertLedgerAccount(updatedAcc).catch((err) => console.error(err));
 
     const newEntry: LedgerEntry = {
       id: `entry_${Date.now()}`,
@@ -813,6 +839,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     };
 
     setLedgerEntries((prev) => [newEntry, ...prev]);
+    supabaseService.insertLedgerEntry(newEntry).catch((err) => console.error(err));
 
     if (acc.type === 'CUSTOMER' && type === 'GOT') {
       setDailyCashflows((prev) => [
