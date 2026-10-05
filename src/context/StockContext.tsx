@@ -89,6 +89,8 @@ interface StockContextType {
   updateUiConfig: (config: Partial<DynamicUiConfig>) => void;
   selectLogo: (logoPath: string) => void;
   clearTransactions: () => void;
+  deleteAllData: () => Promise<void>;
+  bulkImportItems: (importedItems: Item[], replace: boolean) => Promise<void>;
   resetToDemoData: () => void;
   exportDataJson: () => string;
   importDataJson: (json: string) => boolean;
@@ -898,6 +900,38 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     showToast('Transaction history cleared');
   };
 
+  const deleteAllData = async () => {
+    try {
+      await supabaseService.deleteAllData();
+      setItems([]);
+      setTransactions([]);
+      setDailyCashflows([]);
+      showToast('All items, sales, expenses, khata and quotes deleted successfully!');
+    } catch (e) {
+      console.error('Failed to delete everything:', e);
+      showToast('Delete everything action failed');
+    }
+  };
+
+  const bulkImportItems = async (importedItems: Item[], replace: boolean) => {
+    try {
+      if (replace) {
+        await supabaseService.deleteAllItems();
+        setItems(importedItems);
+      } else {
+        setItems((prev) => {
+          const existingIds = new Set(importedItems.map((i) => i.id));
+          const filteredPrev = prev.filter((i) => !existingIds.has(i.id));
+          return [...importedItems, ...filteredPrev];
+        });
+      }
+      await supabaseService.bulkUpsertItems(importedItems);
+    } catch (e) {
+      console.error('Bulk import items failed', e);
+      showToast('Failed to import items');
+    }
+  };
+
   const resetToDemoData = () => {
     refreshFromSupabase();
     showToast('Refreshed directly from Supabase database');
@@ -983,6 +1017,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         updateUiConfig,
         selectLogo,
         clearTransactions,
+        deleteAllData,
+        bulkImportItems,
         resetToDemoData,
         exportDataJson,
         importDataJson,

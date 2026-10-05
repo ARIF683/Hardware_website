@@ -4,6 +4,8 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -98,6 +100,63 @@ fun SettingsScreen(viewModel: StockViewModel) {
     var showLogoutDialog by remember { mutableStateOf(false) }
     var showExportDialog by remember { mutableStateOf(false) }
     var showImportDialog by remember { mutableStateOf(false) }
+    var replaceExisting by remember { mutableStateOf(false) }
+
+    val selectFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                val inputStream = context.contentResolver.openInputStream(uri)
+                if (inputStream != null) {
+                    val fileName = getFileName(context, uri)
+                    if (fileName.endsWith(".xlsx", ignoreCase = true)) {
+                        val parsed = com.example.util.XlsxParser.parseItems(inputStream)
+                        if (parsed.isEmpty()) {
+                            viewModel.showToast("Could not parse XLSX. Verify sheet layout.")
+                        } else {
+                            val items = parsed.mapIndexed { index, i ->
+                                com.example.data.model.Item(
+                                    id = System.currentTimeMillis().toString(36) + (1000..9999).random().toString(36) + index,
+                                    o = index,
+                                    code = i.code,
+                                    barcode = i.barcode,
+                                    name = i.name,
+                                    cost = i.cost,
+                                    price = i.price,
+                                    type = i.type,
+                                    brand = i.brand,
+                                    size = i.size,
+                                    unit = i.unit,
+                                    mrp = i.mrp,
+                                    qty = i.qty,
+                                    aliases = i.aliases,
+                                    low = 0.0,
+                                    updatedAt = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US).format(java.util.Date())
+                                )
+                            }
+                            viewModel.importItems(items, replaceExisting)
+                            showImportDialog = false
+                            viewModel.showToast("Successfully imported ${items.size} items from Excel!")
+                        }
+                    } else {
+                        val csvText = inputStream.bufferedReader().use { it.readText() }
+                        val parsed = parseCsvItems(csvText)
+                        if (parsed.isEmpty()) {
+                            viewModel.showToast("Could not parse CSV. Verify formatting.")
+                        } else {
+                            viewModel.importItems(parsed, replaceExisting)
+                            showImportDialog = false
+                            viewModel.showToast("Successfully imported ${parsed.size} items from CSV file!")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                viewModel.showToast("Error reading file: ${e.message}")
+            }
+        }
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -569,7 +628,6 @@ fun SettingsScreen(viewModel: StockViewModel) {
     // Import Dialog
     if (showImportDialog) {
         var rawCsv by remember { mutableStateOf("") }
-        var replaceExisting by remember { mutableStateOf(false) }
 
         Dialog(onDismissRequest = { showImportDialog = false }) {
             Card(
@@ -580,17 +638,37 @@ fun SettingsScreen(viewModel: StockViewModel) {
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Import from CSV",
+                        text = "Import items (XLSX / CSV)",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    Button(
+                        onClick = { selectFileLauncher.launch("*/*") },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = BrandBlue)
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Choose Excel (.xlsx) or CSV File")
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "Or paste raw CSV text below:",
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Paste CSV text with columns: SKU, Barcode, Item Name, Cost, Price, Type, Brand, Size, Unit, MRP, Quantity, Aliases",
+                        text = "Columns: SKU, Barcode, Item Name, Cost, Price, Type, Brand, Size, Unit, MRP, Quantity, Aliases",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
                     OutlinedTextField(
                         value = rawCsv,
@@ -598,7 +676,7 @@ fun SettingsScreen(viewModel: StockViewModel) {
                         placeholder = { Text("Paste CSV data here…") },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(160.dp)
+                            .height(140.dp)
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -761,4 +839,29 @@ private fun parseCsvItems(csv: String): List<Item> {
         }
     }
     return result
+}
+
+private fun getFileName(context: Context, uri: android.net.Uri): String {
+    var result: String? = null
+    if (uri.scheme == "content") {
+        val cursor = context.contentResolver.query(uri, null, null, null, null)
+        try {
+            if (cursor != null && cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (index >= 0) {
+                    result = cursor.getString(index)
+                }
+            }
+        } finally {
+            cursor?.close()
+        }
+    }
+    if (result == null) {
+        result = uri.path
+        val cut = result?.lastIndexOf('/') ?: -1
+        if (cut != -1) {
+            result = result?.substring(cut + 1)
+        }
+    }
+    return result ?: "file.xlsx"
 }

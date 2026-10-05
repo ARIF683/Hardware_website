@@ -274,6 +274,40 @@ class SupabaseService {
     }
   }
 
+  public async bulkUpsertItems(items: Item[]): Promise<void> {
+    try {
+      const payload = items.map((item) => ({
+        id: item.id,
+        o: item.o,
+        name: item.name,
+        code: item.code,
+        barcode: item.barcode,
+        type: item.type,
+        brand: item.brand,
+        size: item.size,
+        aliases: item.aliases,
+        mrp: item.mrp,
+        cost: item.cost,
+        price: item.price,
+        qty: item.qty,
+        low: item.low,
+        unit: item.unit,
+        updated_at: new Date().toISOString()
+      }));
+
+      await fetch(`${this.url}/rest/v1/items?on_conflict=id`, {
+        method: 'POST',
+        headers: {
+          ...this.getHeaders(),
+          'Prefer': 'resolution=merge-duplicates,return=minimal'
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (e) {
+      console.error('Error bulk upserting items to Supabase', e);
+    }
+  }
+
   public async updateItemQty(id: string, newQty: number): Promise<void> {
     try {
       await fetch(`${this.url}/rest/v1/items?id=eq.${encodeURIComponent(id)}`, {
@@ -487,7 +521,7 @@ class SupabaseService {
             const topic = data.topic || '';
             const payload = data.payload?.data || data.payload;
             const eventType = payload?.type || '';
-            const record = payload?.record || payload?.new;
+            const record = payload?.record || payload?.new || payload?.old || payload?.old_record;
             if (topic.includes('purchases') || topic.includes('daily_cashflow') || topic.includes('cashflow')) {
               if (onCashflowChanged) {
                 onCashflowChanged(eventType, record);

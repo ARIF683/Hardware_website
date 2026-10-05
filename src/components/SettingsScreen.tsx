@@ -23,6 +23,7 @@ import {
 import { useStock } from '../context/StockContext';
 import { ShopProfile } from '../types';
 import { SUPABASE_URL, SUPABASE_KEY, supabaseService } from '../services/supabaseService';
+import * as XLSX from 'xlsx';
 
 export const SettingsScreen: React.FC = () => {
   const {
@@ -39,6 +40,8 @@ export const SettingsScreen: React.FC = () => {
     setPinLockEnabled,
     changeAdminPin,
     clearTransactions,
+    deleteAllData,
+    bulkImportItems,
     resetToDemoData,
     exportDataJson,
     importDataJson,
@@ -51,6 +54,9 @@ export const SettingsScreen: React.FC = () => {
 
   // Profile local form
   const [profileForm, setProfileForm] = useState<ShopProfile>(shopProfile);
+
+  // Import options
+  const [replaceOnImport, setReplaceOnImport] = useState(false);
 
   // Admin PIN modal
   const [pinInput, setPinInput] = useState('');
@@ -536,17 +542,34 @@ export const SettingsScreen: React.FC = () => {
             </button>
 
             {isAdmin && (
-              <button
-                onClick={() => {
-                  if (confirm('Clear all historical transactions? Inventory balances will remain unchanged.')) {
-                    clearTransactions();
-                  }
-                }}
-                className="px-3.5 py-2 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold rounded-xl transition-colors flex items-center gap-1.5"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Clear Transaction History</span>
-              </button>
+              <>
+                <button
+                  onClick={() => {
+                    if (confirm('Clear all historical transactions? Inventory balances will remain unchanged.')) {
+                      clearTransactions();
+                    }
+                  }}
+                  className="px-3.5 py-2 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold rounded-xl transition-colors flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Clear Transaction History</span>
+                </button>
+
+                <button
+                  onClick={async () => {
+                    const text = prompt('This permanently deletes ALL items, sales, expenses, khata ledger, and quotations from the app and cloud database. Type DELETE to confirm.');
+                    if (text === 'DELETE') {
+                      await deleteAllData();
+                    } else if (text !== null) {
+                      showToast('Deletion cancelled. You must type DELETE.');
+                    }
+                  }}
+                  className="px-3.5 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-1.5 shadow-xs"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Delete All Data (Delete Everything)</span>
+                </button>
+              </>
             )}
           </div>
         </div>
