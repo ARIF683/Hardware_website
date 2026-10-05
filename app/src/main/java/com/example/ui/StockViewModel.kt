@@ -562,6 +562,17 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         return repository.getEntriesForAccount(accountId)
     }
 
+    fun updateLedgerEntry(updatedEntry: LedgerEntry) {
+        viewModelScope.launch {
+            val res = repository.updateLedgerEntry(updatedEntry)
+            if (res.isSuccess) {
+                showToast("Ledger entry updated & balance recalculated ✓")
+            } else {
+                showToast("Error updating entry: ${res.exceptionOrNull()?.message}")
+            }
+        }
+    }
+
     fun deleteLedgerEntry(entryId: String, accountId: String) {
         viewModelScope.launch {
             repository.deleteLedgerEntry(entryId, accountId)

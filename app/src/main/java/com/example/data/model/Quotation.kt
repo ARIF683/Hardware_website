@@ -11,6 +11,7 @@ data class QuotationLineItem(
     val itemId: String? = null,
     val name: String,
     val code: String = "",
+    val type: String = "",
     val unit: String = "pcs",
     val qty: Double = 1.0,
     val unitPrice: Double = 0.0,

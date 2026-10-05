@@ -120,6 +120,9 @@ interface LedgerDao {
     @Query("SELECT * FROM ledger_entries WHERE account_id = :accountId ORDER BY date DESC, created_at DESC")
     fun getEntriesForAccount(accountId: String): Flow<List<com.example.data.model.LedgerEntry>>
 
+    @Query("SELECT * FROM ledger_entries WHERE account_id = :accountId ORDER BY date ASC, created_at ASC")
+    suspend fun getEntriesForAccountOnce(accountId: String): List<com.example.data.model.LedgerEntry>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertEntry(entry: com.example.data.model.LedgerEntry)
 

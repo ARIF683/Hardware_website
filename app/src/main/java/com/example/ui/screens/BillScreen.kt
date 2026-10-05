@@ -42,6 +42,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -103,6 +104,7 @@ fun BillScreen(viewModel: StockViewModel) {
     }
 
     var showCalculator by remember { mutableStateOf(false) }
+    var showSequentialScanDialog by remember { mutableStateOf(false) }
 
     // Pick image from gallery
     val galleryLauncher = rememberLauncherForActivityResult(
@@ -210,8 +212,51 @@ fun BillScreen(viewModel: StockViewModel) {
                     .fillMaxSize()
                     .padding(horizontal = 16.dp)
             ) {
+                // Quick Sequential Scan Banner for Receiving Shipments
                 item {
                     Spacer(modifier = Modifier.height(12.dp))
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = BrandBlue.copy(alpha = 0.12f)),
+                        border = androidx.compose.foundation.BorderStroke(1.5.dp, BrandBlue),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Surface(color = BrandBlue, shape = CircleShape, modifier = Modifier.size(32.dp)) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        Text("⚡", fontSize = 16.sp)
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column {
+                                    Text(
+                                        text = "Quick Bill Entry (Sequential Scan)",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = BrandBlue
+                                    )
+                                    Text(
+                                        text = "Scan items sequentially when receiving shipments to auto-populate the bill.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Button(
+                                onClick = { showSequentialScanDialog = true },
+                                colors = ButtonDefaults.buttonColors(containerColor = BrandBlue),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("⚡ Start Sequential Shipment Scan", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(14.dp))
                     Card(
                         shape = RoundedCornerShape(14.dp),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -307,19 +352,19 @@ fun BillScreen(viewModel: StockViewModel) {
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Text(
-                                text = "No image?",
+                                text = "Manual Entry without Photo",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "You can skip the photo and just enter rows directly. Useful if you already have the physical bill.",
+                                text = "Skip the photo and enter rows or scan items directly.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                             OutlinedButton(onClick = { stage = "review" }) {
-                                Text("Enter items without a photo →")
+                                Text("Enter items directly →")
                             }
                         }
                     }
@@ -477,20 +522,30 @@ fun BillScreen(viewModel: StockViewModel) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        OutlinedButton(onClick = {
-                            rows.add(
-                                BillRowData(
-                                    id = "row_${System.currentTimeMillis()}",
-                                    name = "",
-                                    rate = 0.0,
-                                    qty = 1.0,
-                                    unit = "pcs",
-                                    include = true
+                        OutlinedButton(
+                            onClick = { showSequentialScanDialog = true },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("⚡ Quick Scan")
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                rows.add(
+                                    BillRowData(
+                                        id = "row_${System.currentTimeMillis()}",
+                                        name = "",
+                                        rate = 0.0,
+                                        qty = 1.0,
+                                        unit = "pcs",
+                                        include = true
+                                    )
                                 )
-                            )
-                        }) {
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
                             Text("+ Add row")
                         }
 
@@ -503,13 +558,276 @@ fun BillScreen(viewModel: StockViewModel) {
                                 }
                                 viewModel.confirmBill(supplier, billNo, billDate, rows)
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = BrandBlue)
+                            colors = ButtonDefaults.buttonColors(containerColor = BrandBlue),
+                            modifier = Modifier.weight(1.2f)
                         ) {
                             Text("Confirm (${includedRows.size})")
                         }
                     }
 
                     Spacer(modifier = Modifier.height(80.dp))
+                }
+            }
+        }
+    }
+
+    if (showSequentialScanDialog) {
+        SequentialScanBillDialog(
+            allItems = allItems,
+            onDismiss = { showSequentialScanDialog = false },
+            onItemsScanned = { scannedRows ->
+                if (scannedRows.isNotEmpty()) {
+                    // Replace empty initial row if it's untouched
+                    if (rows.size == 1 && rows[0].name.isBlank()) {
+                        rows.clear()
+                    }
+                    rows.addAll(scannedRows)
+                    stage = "review"
+                    viewModel.showToast("Added ${scannedRows.size} shipment items to bill ✓")
+                }
+                showSequentialScanDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+fun SequentialScanBillDialog(
+    allItems: List<Item>,
+    onDismiss: () -> Unit,
+    onItemsScanned: (List<BillRowData>) -> Unit
+) {
+    var scannedInput by remember { mutableStateOf("") }
+    val scannedList = remember { mutableStateListOf<BillRowData>() }
+
+    fun processBarcode(code: String) {
+        val clean = code.trim()
+        if (clean.isEmpty()) return
+
+        val matched = allItems.firstOrNull {
+            it.barcode.equals(clean, ignoreCase = true) ||
+            it.code.equals(clean, ignoreCase = true) ||
+            it.name.equals(clean, ignoreCase = true) ||
+            it.aliases.split(",").any { a -> a.trim().equals(clean, ignoreCase = true) }
+        }
+
+        if (matched != null) {
+            val existingIdx = scannedList.indexOfFirst { it.name.equals(matched.name, ignoreCase = true) }
+            if (existingIdx >= 0) {
+                val current = scannedList[existingIdx]
+                scannedList[existingIdx] = current.copy(qty = current.qty + 1.0)
+            } else {
+                scannedList.add(
+                    BillRowData(
+                        id = "scan_${System.currentTimeMillis()}_${scannedList.size}",
+                        name = matched.name,
+                        matchedItem = matched,
+                        rate = matched.cost,
+                        qty = 1.0,
+                        type = matched.type,
+                        brand = matched.brand,
+                        size = matched.size,
+                        unit = matched.unit.ifBlank { "pcs" },
+                        include = true
+                    )
+                )
+            }
+        } else {
+            // New uncatalogued item
+            val existingIdx = scannedList.indexOfFirst { it.name.equals(clean, ignoreCase = true) }
+            if (existingIdx >= 0) {
+                val current = scannedList[existingIdx]
+                scannedList[existingIdx] = current.copy(qty = current.qty + 1.0)
+            } else {
+                scannedList.add(
+                    BillRowData(
+                        id = "scan_${System.currentTimeMillis()}_${scannedList.size}",
+                        name = clean,
+                        matchedItem = null,
+                        rate = 0.0,
+                        qty = 1.0,
+                        unit = "pcs",
+                        include = true
+                    )
+                )
+            }
+        }
+        scannedInput = ""
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("⚡ Sequential Shipment Scan", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = BrandBlue)
+                    }
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Scan barcodes continuously as you unpack boxes. Quantities will auto-increment!",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = scannedInput,
+                        onValueChange = { scannedInput = it },
+                        label = { Text("Scan / Type Barcode or SKU") },
+                        placeholder = { Text("e.g. 890123456789") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+
+                    Button(
+                        onClick = { processBarcode(scannedInput) },
+                        enabled = scannedInput.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(containerColor = BrandBlue),
+                        modifier = Modifier.height(56.dp)
+                    ) {
+                        Text("+ Add")
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Live Scanned Items List
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "SCANNED ITEMS (${scannedList.size})",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Text(
+                        "Total Qty: ${scannedList.sumOf { it.qty }.toInt()}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                if (scannedList.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            "No items scanned yet.\nScan box barcodes sequentially to populate the bill.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        itemsIndexed(scannedList) { sIdx, sRow ->
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(8.dp).fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(sRow.name, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                        Text("Rate: ₹${sRow.rate} • Unit: ${sRow.unit}", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Surface(
+                                            color = BrandBlue.copy(alpha = 0.15f),
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "Qty: ${sRow.qty.toInt()}",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp,
+                                                color = BrandBlue,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                            )
+                                        }
+
+                                        IconButton(
+                                            onClick = {
+                                                if (sRow.qty > 1) {
+                                                    scannedList[sIdx] = sRow.copy(qty = sRow.qty - 1)
+                                                } else {
+                                                    scannedList.removeAt(sIdx)
+                                                }
+                                            },
+                                            modifier = Modifier.size(32.dp)
+                                        ) {
+                                            Icon(Icons.Default.Close, contentDescription = "Remove", tint = DangerRed, modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Cancel")
+                    }
+
+                    Button(
+                        onClick = { onItemsScanned(scannedList.toList()) },
+                        enabled = scannedList.isNotEmpty(),
+                        colors = ButtonDefaults.buttonColors(containerColor = BrandBlue),
+                        modifier = Modifier.weight(1.5f)
+                    ) {
+                        Text("✓ Apply to Bill (${scannedList.size})", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
         }
@@ -568,10 +886,11 @@ fun BillRowEditor(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Rate and Quantity
+            // Rate and Quantity + Multi-Unit Conversion
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
                     value = if (row.rate > 0) row.rate.toString() else "",
@@ -585,17 +904,37 @@ fun BillRowEditor(
                     modifier = Modifier.weight(1f)
                 )
 
-                OutlinedTextField(
-                    value = if (row.qty > 0) row.qty.toString() else "",
-                    onValueChange = {
-                        val q = it.toDoubleOrNull() ?: 0.0
-                        onUpdate(row.copy(qty = q))
-                    },
-                    label = { Text("Qty") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.weight(1f)
-                )
+                Column(modifier = Modifier.weight(1f)) {
+                    OutlinedTextField(
+                        value = if (row.qty > 0) row.qty.toString() else "",
+                        onValueChange = {
+                            val q = it.toDoubleOrNull() ?: 0.0
+                            onUpdate(row.copy(qty = q))
+                        },
+                        label = { Text("Qty (${row.unit})") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    // Multi-Unit Conversion Pill
+                    val paired = com.example.util.UnitConversionHelper.getPairedUnit(row.unit)
+                    if (paired.first != row.unit) {
+                        Text(
+                            text = "⇄ Convert to ${paired.first.uppercase()}",
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = BrandBlue,
+                            modifier = Modifier
+                                .clickable {
+                                    val newUnit = paired.first
+                                    val convertedQty = com.example.util.UnitConversionHelper.convertQuantity(row.unit, newUnit, row.qty, paired.second)
+                                    onUpdate(row.copy(unit = newUnit, qty = convertedQty))
+                                }
+                                .padding(top = 2.dp)
+                        )
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))

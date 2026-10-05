@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Message
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PictureAsPdf
@@ -121,9 +122,37 @@ fun LedgerScreen(viewModel: StockViewModel) {
         LedgerAccountDetailScreen(
             account = detailAccount,
             viewModel = viewModel,
-            onBack = { selectedAccountForDetail = null }
+            onBack = { selectedAccountForDetail = null },
+            onAccountDeleted = { selectedAccountForDetail = null }
         )
         return
+    }
+
+    if (accountToDelete != null) {
+        val target = accountToDelete!!
+        AlertDialog(
+            onDismissRequest = { accountToDelete = null },
+            title = { Text("Delete Khata Account?") },
+            text = {
+                Text(
+                    "Are you sure you want to delete ${target.name} along with its entire transaction history from local storage and DB?\n\nThis action cannot be undone."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteLedgerAccount(target.id)
+                        accountToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete Forever")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { accountToDelete = null }) { Text("Cancel") }
+            }
+        )
     }
 
     Scaffold(
@@ -402,22 +431,37 @@ fun LedgerAccountCard(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        if (account.notes.isNotEmpty()) {
+                            Text(
+                                text = "📝 ${account.notes}",
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
 
-                Column(horizontalAlignment = Alignment.End) {
-                    val statusLabel = if (isSupplier) {
-                        if (account.netBalance > 0) "You Pay" else if (account.netBalance < 0) "Advance" else "Settled"
-                    } else {
-                        if (account.netBalance > 0) "You Get" else if (account.netBalance < 0) "Advance" else "Settled"
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        val statusLabel = if (isSupplier) {
+                            if (account.netBalance > 0) "You Pay" else if (account.netBalance < 0) "Advance" else "Settled"
+                        } else {
+                            if (account.netBalance > 0) "You Get" else if (account.netBalance < 0) "Advance" else "Settled"
+                        }
+                        Text(text = statusLabel, fontSize = 10.sp, color = balanceColor, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            text = String.format(Locale.US, "₹%.2f", Math.abs(account.netBalance)),
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 16.sp,
+                            color = balanceColor
+                        )
                     }
-                    Text(text = statusLabel, fontSize = 10.sp, color = balanceColor, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        text = String.format(Locale.US, "₹%.2f", Math.abs(account.netBalance)),
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 16.sp,
-                        color = balanceColor
-                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete Account", tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+                    }
                 }
             }
 
@@ -454,7 +498,8 @@ fun LedgerAccountCard(
 fun LedgerAccountDetailScreen(
     account: LedgerAccount,
     viewModel: StockViewModel,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onAccountDeleted: () -> Unit = onBack
 ) {
     val context = LocalContext.current
     val entriesFlow = remember(account.id) { viewModel.getEntriesForAccount(account.id) }
@@ -462,9 +507,74 @@ fun LedgerAccountDetailScreen(
 
     var showEntryDialog by remember { mutableStateOf(false) }
     var entryType by remember { mutableStateOf("GAVE") }
+    var entryToEdit by remember { mutableStateOf<LedgerEntry?>(null) }
+    var entryToDelete by remember { mutableStateOf<LedgerEntry?>(null) }
+    var showDeleteAccountConfirm by remember { mutableStateOf(false) }
 
     val isSupplier = account.type == "SUPPLIER"
     val balanceColor = if (account.netBalance >= 0) Color(0xFF16A34A) else Color(0xFFDC2626)
+
+    if (showDeleteAccountConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteAccountConfirm = false },
+            title = { Text("Delete Khata Account?") },
+            text = {
+                Text("Delete ${account.name} along with all ${entries.size} transaction records from local storage & DB? This cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteLedgerAccount(account.id)
+                        showDeleteAccountConfirm = false
+                        onAccountDeleted()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete Forever")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteAccountConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (entryToDelete != null) {
+        val target = entryToDelete!!
+        AlertDialog(
+            onDismissRequest = { entryToDelete = null },
+            title = { Text("Delete Transaction Entry?") },
+            text = {
+                Text("Delete entry of ₹${target.amount} (${if (target.type == "GAVE") "Gave" else "Got"})? The account balance will be automatically recalculated.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        viewModel.deleteLedgerEntry(target.id, account.id)
+                        entryToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { entryToDelete = null }) { Text("Cancel") }
+            }
+        )
+    }
+
+    if (entryToEdit != null) {
+        EditLedgerEntryDialog(
+            entry = entryToEdit!!,
+            account = account,
+            onDismiss = { entryToEdit = null },
+            onSave = { updated ->
+                viewModel.updateLedgerEntry(updated)
+                entryToEdit = null
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -503,6 +613,11 @@ fun LedgerAccountDetailScreen(
                     ) {
                         Icon(Icons.Default.Print, contentDescription = "Print PDF", tint = MaterialTheme.colorScheme.primary)
                     }
+                    IconButton(
+                        onClick = { showDeleteAccountConfirm = true }
+                    ) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete Account", tint = MaterialTheme.colorScheme.error)
+                    }
                 }
             }
         }
@@ -512,42 +627,60 @@ fun LedgerAccountDetailScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Balance Banner
+            // Balance Banner & Notes
             Surface(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text("Current Balance", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(
-                            text = String.format(Locale.US, "₹%.2f", Math.abs(account.netBalance)),
-                            fontWeight = FontWeight.ExtraBold,
-                            fontSize = 22.sp,
-                            color = balanceColor
-                        )
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text("Current Balance", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                text = String.format(Locale.US, "₹%.2f", Math.abs(account.netBalance)),
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 22.sp,
+                                color = balanceColor
+                            )
+                        }
+
+                        if (account.phone.isNotEmpty()) {
+                            Button(
+                                onClick = {
+                                    val msg = "Hello ${account.name}, your current ledger balance with Hardware Store is Rs. ${String.format(Locale.US, "%.2f", Math.abs(account.netBalance))}."
+                                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                                        data = Uri.parse("https://api.whatsapp.com/send?phone=${account.phone.replace("+", "").replace(" ", "")}&text=${Uri.encode(msg)}")
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    try { context.startActivity(intent) } catch (_: Exception) {}
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366))
+                            ) {
+                                Icon(Icons.Default.Message, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("WhatsApp", fontSize = 12.sp)
+                            }
+                        }
                     }
 
-                    if (account.phone.isNotEmpty()) {
-                        Button(
-                            onClick = {
-                                val msg = "Hello ${account.name}, your current ledger balance with Hardware Store is Rs. ${String.format(Locale.US, "%.2f", Math.abs(account.netBalance))}."
-                                val intent = Intent(Intent.ACTION_VIEW).apply {
-                                    data = Uri.parse("https://api.whatsapp.com/send?phone=${account.phone.replace("+", "").replace(" ", "")}&text=${Uri.encode(msg)}")
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                try { context.startActivity(intent) } catch (_: Exception) {}
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF25D366))
+                    if (account.notes.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Surface(
+                            color = MaterialTheme.colorScheme.surface,
+                            shape = RoundedCornerShape(6.dp),
+                            modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.Message, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text("WhatsApp", fontSize = 12.sp)
+                            Text(
+                                text = "📝 Note: ${account.notes}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
+                            )
                         }
                     }
                 }
@@ -586,33 +719,61 @@ fun LedgerAccountDetailScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = if (entry.type == "GAVE") "Gave / Debit" else "Got / Credit",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp,
-                                        color = if (entry.type == "GAVE") Color(0xFFDC2626) else Color(0xFF16A34A)
-                                    )
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Surface(
+                                            color = if (entry.type == "GAVE") Color(0xFFDC2626).copy(alpha = 0.15f) else Color(0xFF16A34A).copy(alpha = 0.15f),
+                                            shape = RoundedCornerShape(4.dp)
+                                        ) {
+                                            Text(
+                                                text = if (entry.type == "GAVE") "Gave (-)" else "Got (+)",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 11.sp,
+                                                color = if (entry.type == "GAVE") Color(0xFFDC2626) else Color(0xFF16A34A),
+                                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Text(entry.date, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
                                     if (entry.description.isNotEmpty()) {
-                                        Text(entry.description, fontSize = 12.sp)
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(entry.description, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                                     }
                                     if (entry.billRef.isNotEmpty()) {
                                         Text("Bill #${entry.billRef}", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
                                     }
-                                    Text(entry.date, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
 
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text(
-                                        text = String.format(Locale.US, "%s₹%.2f", if (entry.type == "GAVE") "-" else "+", entry.amount),
-                                        fontWeight = FontWeight.ExtraBold,
-                                        fontSize = 15.sp,
-                                        color = if (entry.type == "GAVE") Color(0xFFDC2626) else Color(0xFF16A34A)
-                                    )
-                                    Text(
-                                        text = String.format(Locale.US, "Bal: ₹%.2f", entry.balanceAfter),
-                                        fontSize = 10.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            text = String.format(Locale.US, "%s₹%.2f", if (entry.type == "GAVE") "-" else "+", entry.amount),
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 15.sp,
+                                            color = if (entry.type == "GAVE") Color(0xFFDC2626) else Color(0xFF16A34A)
+                                        )
+                                        Text(
+                                            text = String.format(Locale.US, "Bal: ₹%.2f", entry.balanceAfter),
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.width(6.dp))
+
+                                    IconButton(
+                                        onClick = { entryToEdit = entry },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.Edit, contentDescription = "Edit Entry", tint = BrandBlue, modifier = Modifier.size(16.dp))
+                                    }
+
+                                    IconButton(
+                                        onClick = { entryToDelete = entry },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Delete Entry", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                                    }
                                 }
                             }
                         }
@@ -672,6 +833,103 @@ fun LedgerAccountDetailScreen(
 }
 
 @Composable
+fun EditLedgerEntryDialog(
+    entry: LedgerEntry,
+    account: LedgerAccount,
+    onDismiss: () -> Unit,
+    onSave: (LedgerEntry) -> Unit
+) {
+    var type by remember { mutableStateOf(entry.type) }
+    var amountText by remember { mutableStateOf(entry.amount.toString()) }
+    var description by remember { mutableStateOf(entry.description) }
+    var billRef by remember { mutableStateOf(entry.billRef) }
+    var date by remember { mutableStateOf(entry.date) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text("Edit Transaction Entry", fontWeight = FontWeight.Bold)
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Account: ${account.name}", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = type == "GAVE",
+                        onClick = { type = "GAVE" },
+                        label = { Text("You Gave (-)") }
+                    )
+                    FilterChip(
+                        selected = type == "GOT",
+                        onClick = { type = "GOT" },
+                        label = { Text("You Got (+)") }
+                    )
+                }
+
+                OutlinedTextField(
+                    value = amountText,
+                    onValueChange = { amountText = it },
+                    label = { Text("Amount (₹) *") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                OutlinedTextField(
+                    value = description,
+                    onValueChange = { description = it },
+                    label = { Text("Description / Reason") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
+                )
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = billRef,
+                        onValueChange = { billRef = it },
+                        label = { Text("Bill # (Optional)") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = date,
+                        onValueChange = { date = it },
+                        label = { Text("Date") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val amt = amountText.toDoubleOrNull() ?: 0.0
+                    if (amt <= 0.0) return@Button
+                    onSave(
+                        entry.copy(
+                            type = type,
+                            amount = amt,
+                            date = date,
+                            description = description.trim(),
+                            billRef = billRef.trim()
+                        )
+                    )
+                },
+                enabled = (amountText.toDoubleOrNull() ?: 0.0) > 0,
+                colors = ButtonDefaults.buttonColors(containerColor = BrandBlue)
+            ) {
+                Text("Save Changes")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
 fun AddAccountDialog(
     defaultType: String,
     onDismiss: () -> Unit,
@@ -681,6 +939,7 @@ fun AddAccountDialog(
     var phone by remember { mutableStateOf("") }
     var address by remember { mutableStateOf("") }
     var type by remember { mutableStateOf(defaultType) }
+    var notes by remember { mutableStateOf("") }
     var initialBalanceText by remember { mutableStateOf("") }
 
     val todayStr = remember { SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault()).format(Date()) }
@@ -725,6 +984,13 @@ fun AddAccountDialog(
                     )
                 }
                 OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it },
+                    label = { Text("Description / Notes (e.g. GSTIN, site, remarks)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 2
+                )
+                OutlinedTextField(
                     value = initialBalanceText,
                     onValueChange = { initialBalanceText = it },
                     label = { Text("Opening Balance (₹) [Optional]") },
@@ -745,6 +1011,7 @@ fun AddAccountDialog(
                         phone = phone.trim(),
                         address = address.trim(),
                         type = type,
+                        notes = notes.trim(),
                         netBalance = initBal,
                         createdAt = todayStr,
                         updatedAt = todayStr

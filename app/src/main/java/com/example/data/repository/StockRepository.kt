@@ -695,7 +695,48 @@ class StockRepository(
         }
     }
 
+    suspend fun updateLedgerEntry(
+        updatedEntry: com.example.data.model.LedgerEntry
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            database.ledgerDao().insertEntry(updatedEntry)
+            recalculateAccountBalanceInternal(updatedEntry.accountId)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to update ledger entry", e)
+            Result.failure(e)
+        }
+    }
+
     suspend fun deleteLedgerEntry(entryId: String, accountId: String) = withContext(Dispatchers.IO) {
         database.ledgerDao().deleteEntryById(entryId)
+        recalculateAccountBalanceInternal(accountId)
+    }
+
+    private suspend fun recalculateAccountBalanceInternal(accountId: String) {
+        val account = database.ledgerDao().getAccountById(accountId) ?: return
+        val entries = database.ledgerDao().getEntriesForAccountOnce(accountId)
+
+        var runningBalance = 0.0
+        val updatedEntries = mutableListOf<com.example.data.model.LedgerEntry>()
+
+        for (entry in entries) {
+            val netDelta = if (account.type == "SUPPLIER") {
+                if (entry.type == "GOT") entry.amount else -entry.amount
+            } else {
+                if (entry.type == "GAVE") entry.amount else -entry.amount
+            }
+            runningBalance += netDelta
+            if (entry.balanceAfter != runningBalance) {
+                updatedEntries.add(entry.copy(balanceAfter = runningBalance))
+            }
+        }
+
+        for (u in updatedEntries) {
+            database.ledgerDao().insertEntry(u)
+        }
+
+        val updatedAccount = account.copy(netBalance = runningBalance, updatedAt = nowIso())
+        database.ledgerDao().insertAccount(updatedAccount)
     }
 }
