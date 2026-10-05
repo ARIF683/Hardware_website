@@ -240,15 +240,27 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       if (remoteQuotes && remoteQuotes.length > 0) {
-        setQuotations(remoteQuotes);
+        setQuotations((prev) => {
+          const existingIds = new Set(prev.map((q) => q.id));
+          const newRemote = remoteQuotes.filter((q) => !existingIds.has(q.id));
+          return [...prev, ...newRemote];
+        });
       }
 
       if (remoteLedgerAccs && remoteLedgerAccs.length > 0) {
-        setLedgerAccounts(remoteLedgerAccs);
+        setLedgerAccounts((prev) => {
+          const existingIds = new Set(prev.map((a) => a.id));
+          const newRemote = remoteLedgerAccs.filter((a) => !existingIds.has(a.id));
+          return [...prev, ...newRemote];
+        });
       }
 
       if (remoteLedgerEntries && remoteLedgerEntries.length > 0) {
-        setLedgerEntries(remoteLedgerEntries);
+        setLedgerEntries((prev) => {
+          const existingIds = new Set(prev.map((e) => e.id));
+          const newRemote = remoteLedgerEntries.filter((e) => !existingIds.has(e.id));
+          return [...prev, ...newRemote];
+        });
       }
     } catch (e) {
       console.warn('Could not sync with Supabase, using local cache', e);
