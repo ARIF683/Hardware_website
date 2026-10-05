@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
 import com.example.data.local.AppDatabase
+import com.example.data.model.DailyCashflowRecord
 import com.example.data.model.Item
 import com.example.data.model.PurchaseLine
 import com.example.data.model.PurchaseRecord
@@ -79,6 +80,9 @@ class StockRepository(
     private val txListAdapter = moshi.adapter<List<TransactionRecord>>(
         Types.newParameterizedType(List::class.java, TransactionRecord::class.java)
     )
+    private val cashflowListAdapter = moshi.adapter<List<DailyCashflowRecord>>(
+        Types.newParameterizedType(List::class.java, DailyCashflowRecord::class.java)
+    )
     private val purchaseAdapter = moshi.adapter(PurchaseRecord::class.java)
 
     init {
@@ -146,6 +150,33 @@ class StockRepository(
                     }
                 }
             },
+            onCashflowChanged = { type, cashflow, oldId ->
+                repositoryScope.launch {
+                    try {
+                        val targetId = cashflow?.id ?: oldId ?: ""
+                        val pending = database.syncQueueDao().getAll()
+                        val hasPending = pending.any { q ->
+                            q.payloadJson.contains(targetId)
+                        }
+                        if (hasPending) return@launch
+
+                        when (type) {
+                            "INSERT", "UPDATE" -> {
+                                if (cashflow != null) {
+                                    database.dailyCashflowDao().insert(cashflow)
+                                }
+                            }
+                            "DELETE" -> {
+                                if (oldId != null) {
+                                    database.dailyCashflowDao().deleteById(oldId)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(tag, "Error handling realtime cashflow event", e)
+                    }
+                }
+            },
             onClosedOrFailed = {
                 realtimeWs = null
                 _isRealtimeLive.value = false
@@ -178,12 +209,16 @@ class StockRepository(
         try {
             val remoteItems = supabaseClient.fetchAllItems()
             val remoteTx = supabaseClient.fetchRecentTransactions(500)
+            val remoteCashflow = try { supabaseClient.fetchAllCashflow() } catch (e: Exception) { emptyList() }
 
             if (remoteItems.isNotEmpty()) {
                 database.itemDao().insertAll(remoteItems)
             }
             if (remoteTx.isNotEmpty()) {
                 database.transactionDao().insertAll(remoteTx)
+            }
+            if (remoteCashflow.isNotEmpty()) {
+                database.dailyCashflowDao().insertAll(remoteCashflow)
             }
 
             _syncStatus.value = "Synced ✓"
@@ -554,6 +589,13 @@ class StockRepository(
                             supabaseClient.insertPurchase(pur)
                         }
                     }
+                    "upsertCashflow" -> {
+                        val records = cashflowListAdapter.fromJson(op.payloadJson) ?: emptyList()
+                        supabaseClient.upsertCashflow(records)
+                    }
+                    "deleteCashflow" -> {
+                        supabaseClient.deleteCashflow(listOf(op.payloadJson))
+                    }
                 }
                 database.syncQueueDao().deleteById(op.id)
             }
@@ -722,6 +764,8 @@ class StockRepository(
     suspend fun addDailyCashflow(record: com.example.data.model.DailyCashflowRecord): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             database.dailyCashflowDao().insert(record)
+            enqueueOp("upsertCashflow", cashflowListAdapter.toJson(listOf(record)))
+            flushQueue()
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(tag, "Failed to insert cashflow record", e)
@@ -732,6 +776,8 @@ class StockRepository(
     suspend fun updateDailyCashflow(record: com.example.data.model.DailyCashflowRecord): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             database.dailyCashflowDao().update(record)
+            enqueueOp("upsertCashflow", cashflowListAdapter.toJson(listOf(record)))
+            flushQueue()
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(tag, "Failed to update cashflow record", e)
@@ -742,6 +788,8 @@ class StockRepository(
     suspend fun deleteDailyCashflow(id: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             database.dailyCashflowDao().deleteById(id)
+            enqueueOp("deleteCashflow", id)
+            flushQueue()
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(tag, "Failed to delete cashflow record", e)

@@ -144,6 +144,9 @@ interface DailyCashflowDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(record: com.example.data.model.DailyCashflowRecord)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(records: List<com.example.data.model.DailyCashflowRecord>)
+
     @Update
     suspend fun update(record: com.example.data.model.DailyCashflowRecord)
 

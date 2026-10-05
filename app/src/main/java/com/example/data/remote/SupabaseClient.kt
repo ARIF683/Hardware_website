@@ -1,6 +1,7 @@
 package com.example.data.remote
 
 import android.util.Log
+import com.example.data.model.DailyCashflowRecord
 import com.example.data.model.Item
 import com.example.data.model.PurchaseRecord
 import com.example.data.model.TransactionRecord
@@ -41,6 +42,9 @@ class SupabaseClient(
     )
     private val txListAdapter = moshi.adapter<List<TransactionRecord>>(
         Types.newParameterizedType(List::class.java, TransactionRecord::class.java)
+    )
+    private val cashflowListAdapter = moshi.adapter<List<DailyCashflowRecord>>(
+        Types.newParameterizedType(List::class.java, DailyCashflowRecord::class.java)
     )
     private val purchaseAdapter = moshi.adapter(PurchaseRecord::class.java)
 
@@ -244,6 +248,46 @@ class SupabaseClient(
         }
     }
 
+    suspend fun fetchAllCashflow(): List<DailyCashflowRecord> = withContext(Dispatchers.IO) {
+        val req = newRequestBuilder("daily_cashflow?select=*&order=created_at.desc&limit=2000")
+            .get()
+            .build()
+        val resp = okHttpClient.newCall(req).execute()
+        if (!resp.isSuccessful) {
+            val err = resp.body?.string() ?: "HTTP ${resp.code}"
+            throw Exception("Failed to load cashflow: $err")
+        }
+        val body = resp.body?.string() ?: "[]"
+        cashflowListAdapter.fromJson(body) ?: emptyList()
+    }
+
+    suspend fun upsertCashflow(records: List<DailyCashflowRecord>): Unit = withContext(Dispatchers.IO) {
+        if (records.isEmpty()) return@withContext
+        val json = cashflowListAdapter.toJson(records)
+        val req = newRequestBuilder("daily_cashflow?on_conflict=id")
+            .addHeader("Prefer", "resolution=merge-duplicates,return=minimal")
+            .post(json.toRequestBody(jsonMediaType))
+            .build()
+        val resp = okHttpClient.newCall(req).execute()
+        if (!resp.isSuccessful) {
+            val err = resp.body?.string() ?: "HTTP ${resp.code}"
+            throw Exception("Failed to upsert cashflow: $err")
+        }
+    }
+
+    suspend fun deleteCashflow(ids: List<String>): Unit = withContext(Dispatchers.IO) {
+        if (ids.isEmpty()) return@withContext
+        val idsFormatted = ids.joinToString(",") { java.net.URLEncoder.encode(it, "UTF-8") }
+        val req = newRequestBuilder("daily_cashflow?id=in.($idsFormatted)")
+            .delete()
+            .build()
+        val resp = okHttpClient.newCall(req).execute()
+        if (!resp.isSuccessful) {
+            val err = resp.body?.string() ?: "HTTP ${resp.code}"
+            throw Exception("Failed to delete cashflow: $err")
+        }
+    }
+
     fun parseItemFromDb(obj: JSONObject): Item {
         val mrpVal = if (obj.has("mrp") && !obj.isNull("mrp")) {
             val v = obj.optDouble("mrp")
@@ -270,11 +314,26 @@ class SupabaseClient(
         )
     }
 
+    fun parseCashflowFromDb(obj: JSONObject): DailyCashflowRecord {
+        return DailyCashflowRecord(
+            id = obj.optString("id"),
+            type = obj.optString("type"),
+            amount = obj.optDouble("amount", 0.0),
+            title = obj.optString("title"),
+            category = obj.optString("category"),
+            paymentMode = obj.optString("payment_mode", "Cash").ifEmpty { "Cash" },
+            date = obj.optString("date"),
+            note = obj.optString("note", ""),
+            createdAt = obj.optString("created_at", "")
+        )
+    }
+
     // Realtime WebSocket support matching Phoenix channels protocol
     fun connectRealtime(
         coroutineScope: CoroutineScope,
         onStatusChanged: (Boolean) -> Unit,
         onItemChanged: (type: String, item: Item?, oldId: String?) -> Unit,
+        onCashflowChanged: ((type: String, cashflow: DailyCashflowRecord?, oldId: String?) -> Unit)? = null,
         onClosedOrFailed: () -> Unit
     ): WebSocket? {
         val wsUrl = baseUrl.replace("https://", "wss://") + "/realtime/v1/websocket?apikey=$apiKey&vsn=1.0.0"
@@ -299,6 +358,11 @@ class SupabaseClient(
                                     put("event", "*")
                                     put("schema", "public")
                                     put("table", "items")
+                                })
+                                put(JSONObject().apply {
+                                    put("event", "*")
+                                    put("schema", "public")
+                                    put("table", "daily_cashflow")
                                 })
                             }
                             put("postgres_changes", changeArr)
@@ -341,18 +405,31 @@ class SupabaseClient(
                         onStatusChanged(true)
                     } else if (event == "postgres_changes") {
                         val dataObj = payload?.optJSONObject("data") ?: payload
+                        val table = dataObj?.optString("table") ?: payload?.optString("table") ?: ""
                         val type = dataObj?.optString("type") ?: ""
                         val record = dataObj?.optJSONObject("record")
                         val oldRecord = dataObj?.optJSONObject("old_record")
 
-                        if (type == "INSERT" || type == "UPDATE") {
-                            record?.let {
-                                val item = parseItemFromDb(it)
-                                onItemChanged(type, item, null)
+                        if (table == "daily_cashflow") {
+                            if (type == "INSERT" || type == "UPDATE") {
+                                record?.let {
+                                    val cashflow = parseCashflowFromDb(it)
+                                    onCashflowChanged?.invoke(type, cashflow, null)
+                                }
+                            } else if (type == "DELETE") {
+                                val oldId = record?.optString("id") ?: oldRecord?.optString("id")
+                                onCashflowChanged?.invoke("DELETE", null, oldId)
                             }
-                        } else if (type == "DELETE") {
-                            val oldId = record?.optString("id") ?: oldRecord?.optString("id")
-                            onItemChanged("DELETE", null, oldId)
+                        } else {
+                            if (type == "INSERT" || type == "UPDATE") {
+                                record?.let {
+                                    val item = parseItemFromDb(it)
+                                    onItemChanged(type, item, null)
+                                }
+                            } else if (type == "DELETE") {
+                                val oldId = record?.optString("id") ?: oldRecord?.optString("id")
+                                onItemChanged("DELETE", null, oldId)
+                            }
                         }
                     }
                 } catch (e: Exception) {
