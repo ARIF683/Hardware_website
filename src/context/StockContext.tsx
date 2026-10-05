@@ -129,10 +129,115 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     loadLocal('quotations', [])
   );
   const [ledgerAccounts, setLedgerAccounts] = useState<LedgerAccount[]>(() => {
-    return loadLocal<LedgerAccount[]>('ledger_accounts', []);
+    const defaultAccounts: LedgerAccount[] = [
+      {
+        id: 'acc_jamil',
+        name: 'JAMIL KHUTA MISTRI',
+        phone: '',
+        address: '',
+        type: 'CUSTOMER',
+        netBalance: 200.0,
+        creditLimit: 50000,
+        notes: '1.5" kathi lekar gya thaa, 400 bill hua thaa us...',
+        createdAt: '2026-10-04T10:00:00.000Z',
+        updatedAt: '2026-10-04T10:00:00.000Z'
+      },
+      {
+        id: 'acc_riyaz',
+        name: 'Riyaz',
+        phone: '',
+        address: '',
+        type: 'CUSTOMER',
+        netBalance: 60.0,
+        creditLimit: 50000,
+        notes: '',
+        createdAt: '2026-10-04T10:00:00.000Z',
+        updatedAt: '2026-10-04T10:00:00.000Z'
+      },
+      {
+        id: 'acc_thana',
+        name: 'THANA KE UDHAR GHAR WALA',
+        phone: '',
+        address: '',
+        type: 'CUSTOMER',
+        netBalance: 100.0,
+        creditLimit: 50000,
+        notes: '6"kathi ka due',
+        createdAt: '2026-10-04T10:00:00.000Z',
+        updatedAt: '2026-10-04T10:00:00.000Z'
+      },
+      {
+        id: 'acc_j',
+        name: 'j',
+        phone: '',
+        address: '',
+        type: 'CUSTOMER',
+        netBalance: 60.0,
+        creditLimit: 50000,
+        notes: '',
+        createdAt: '2026-10-04T10:00:00.000Z',
+        updatedAt: '2026-10-04T10:00:00.000Z'
+      }
+    ];
+
+    const list = loadLocal<LedgerAccount[]>('ledger_accounts', defaultAccounts);
+    const cleaned = list.filter((a) => a.id !== 'acc_jamils' && a.name !== 'Jamils');
+    if (cleaned.length === 0) {
+      return defaultAccounts;
+    }
+    return cleaned;
   });
+
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>(() => {
-    return loadLocal<LedgerEntry[]>('ledger_entries', []);
+    const defaultEntries: LedgerEntry[] = [
+      {
+        id: 'entry_jamil',
+        accountId: 'acc_jamil',
+        type: 'GAVE',
+        amount: 200.0,
+        balanceAfter: 200.0,
+        date: '2026-10-04',
+        description: '1.5" kathi lekar gya thaa, 400 bill hua thaa us...',
+        billRef: '',
+        createdAt: '2026-10-04T10:00:00.000Z'
+      },
+      {
+        id: 'entry_riyaz',
+        accountId: 'acc_riyaz',
+        type: 'GAVE',
+        amount: 60.0,
+        balanceAfter: 60.0,
+        date: '2026-10-04',
+        description: 'Opening Due',
+        billRef: '',
+        createdAt: '2026-10-04T10:00:00.000Z'
+      },
+      {
+        id: 'entry_thana',
+        accountId: 'acc_thana',
+        type: 'GAVE',
+        amount: 100.0,
+        balanceAfter: 100.0,
+        date: '2026-10-04',
+        description: '6"kathi ka due',
+        billRef: '',
+        createdAt: '2026-10-04T10:00:00.000Z'
+      },
+      {
+        id: 'entry_j',
+        accountId: 'acc_j',
+        type: 'GAVE',
+        amount: 60.0,
+        balanceAfter: 60.0,
+        date: '2026-10-04',
+        description: 'Opening Due',
+        billRef: '',
+        createdAt: '2026-10-04T10:00:00.000Z'
+      }
+    ];
+
+    const list = loadLocal<LedgerEntry[]>('ledger_entries', defaultEntries);
+    return list.length === 0 ? defaultEntries : list;
   });
   const [dailyCashflows, setDailyCashflows] = useState<DailyCashflowRecord[]>(() => {
     const list = loadLocal<DailyCashflowRecord[]>('daily_cashflows', []);
