@@ -249,125 +249,133 @@ class SupabaseClient(
     }
 
     suspend fun fetchAllCashflow(): List<DailyCashflowRecord> = withContext(Dispatchers.IO) {
+        val resultList = mutableListOf<DailyCashflowRecord>()
+        val seenIds = mutableSetOf<String>()
+
+        // 1. Fetch from purchases table (used by website)
+        try {
+            val req = newRequestBuilder("purchases?select=*&order=created_at.desc&limit=2000")
+                .get()
+                .build()
+            val resp = okHttpClient.newCall(req).execute()
+            if (resp.isSuccessful) {
+                val body = resp.body?.string() ?: "[]"
+                val array = JSONArray(body)
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    val cf = parseCashflowFromPurchaseObj(obj)
+                    if (cf.id.isNotEmpty() && seenIds.add(cf.id)) {
+                        resultList.add(cf)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Fetch purchases non-success", e)
+        }
+
+        // 2. Fetch from daily_cashflow table (used by app)
         try {
             val req = newRequestBuilder("daily_cashflow?select=*&order=created_at.desc&limit=2000")
                 .get()
                 .build()
             val resp = okHttpClient.newCall(req).execute()
-            if (!resp.isSuccessful) {
-                val err = resp.body?.string() ?: "HTTP ${resp.code}"
-                Log.w(tag, "Fetch cashflow non-success: $err")
-                return@withContext emptyList()
+            if (resp.isSuccessful) {
+                val body = resp.body?.string() ?: "[]"
+                val list = cashflowListAdapter.fromJson(body) ?: emptyList()
+                for (cf in list) {
+                    if (cf.id.isNotEmpty() && seenIds.add(cf.id)) {
+                        resultList.add(cf)
+                    }
+                }
             }
-            val body = resp.body?.string() ?: "[]"
-            cashflowListAdapter.fromJson(body) ?: emptyList()
         } catch (e: Exception) {
-            Log.w(tag, "Failed to load cashflow from remote", e)
-            emptyList()
+            Log.w(tag, "Fetch daily_cashflow non-success", e)
         }
+
+        resultList
     }
 
     suspend fun upsertCashflow(records: List<DailyCashflowRecord>): Unit = withContext(Dispatchers.IO) {
         if (records.isEmpty()) return@withContext
 
+        // 1. Upsert to purchases table for website compatibility
         try {
-            // 1. Try on_conflict=id upsert first
+            val purchasesArray = JSONArray()
+            for (rec in records) {
+                val obj = JSONObject().apply {
+                    put("client_id", rec.id)
+                    put("id", rec.id)
+                    put("supplier", rec.category.ifEmpty { if (rec.type == "SALE") "Counter Sale" else "Purchase Expense" })
+                    put("bill_no", rec.title)
+                    put("bill_date", rec.date)
+                    put("total", rec.amount)
+                    put("type", rec.type)
+                    put("category", rec.category)
+                    put("payment_mode", rec.paymentMode)
+                    put("note", rec.note)
+                    put("created_at", rec.createdAt)
+                    val lines = JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("qty", 1)
+                            put("name", rec.category)
+                            put("rate", rec.amount)
+                            put("bill_name", rec.note)
+                        })
+                    }
+                    put("lines", lines)
+                }
+                purchasesArray.put(obj)
+            }
+            val reqPurchases = newRequestBuilder("purchases")
+                .addHeader("Prefer", "return=minimal")
+                .post(purchasesArray.toString().toRequestBody(jsonMediaType))
+                .build()
+            okHttpClient.newCall(reqPurchases).execute()
+        } catch (e: Exception) {
+            Log.w(tag, "Upsert to purchases table warning", e)
+        }
+
+        // 2. Upsert to daily_cashflow table
+        try {
             val json = cashflowListAdapter.toJson(records)
             var req = newRequestBuilder("daily_cashflow?on_conflict=id")
                 .addHeader("Prefer", "resolution=merge-duplicates,return=minimal")
                 .post(json.toRequestBody(jsonMediaType))
                 .build()
             var resp = okHttpClient.newCall(req).execute()
-            if (resp.isSuccessful) return@withContext
-
-            val err1 = resp.body?.string() ?: "HTTP ${resp.code}"
-            Log.w(tag, "First attempt to upsert cashflow failed: $err1. Trying plain POST...")
-
-            // 2. Try plain POST without on_conflict (in case no unique constraint on id)
-            req = newRequestBuilder("daily_cashflow")
-                .addHeader("Prefer", "return=minimal")
-                .post(json.toRequestBody(jsonMediaType))
-                .build()
-            resp = okHttpClient.newCall(req).execute()
-            if (resp.isSuccessful) return@withContext
-
-            val err2 = resp.body?.string() ?: "HTTP ${resp.code}"
-            Log.w(tag, "Second attempt to insert cashflow failed: $err2. Trying explicit JSON payload...")
-
-            // 3. Explicit JSON formatting for Postgres column names
-            val jsonArray = JSONArray()
-            for (rec in records) {
-                val obj = JSONObject().apply {
-                    put("id", rec.id)
-                    put("type", rec.type)
-                    put("amount", rec.amount)
-                    put("title", rec.title)
-                    put("category", rec.category)
-                    put("payment_mode", rec.paymentMode)
-                    put("date", rec.date)
-                    put("note", rec.note)
-                    put("created_at", rec.createdAt)
-                }
-                jsonArray.put(obj)
+            if (!resp.isSuccessful) {
+                req = newRequestBuilder("daily_cashflow")
+                    .addHeader("Prefer", "return=minimal")
+                    .post(json.toRequestBody(jsonMediaType))
+                    .build()
+                resp = okHttpClient.newCall(req).execute()
             }
-            req = newRequestBuilder("daily_cashflow")
-                .addHeader("Prefer", "return=minimal")
-                .post(jsonArray.toString().toRequestBody(jsonMediaType))
-                .build()
-            resp = okHttpClient.newCall(req).execute()
-            if (resp.isSuccessful) return@withContext
-
-            val err3 = resp.body?.string() ?: "HTTP ${resp.code}"
-            if (resp.code == 404 || err3.contains("PGRST200") || err3.contains("does not exist")) {
-                Log.w(tag, "Table daily_cashflow does not exist on Supabase: $err3")
-                return@withContext
-            }
-            throw Exception("Failed to upsert cashflow: $err3")
         } catch (e: Exception) {
-            val msg = e.message ?: ""
-            if (msg.contains("PGRST200") || msg.contains("404") || msg.contains("does not exist")) {
-                Log.w(tag, "Table daily_cashflow not found on Supabase: $msg")
-                return@withContext
-            }
-            throw e
+            Log.w(tag, "Upsert to daily_cashflow table warning", e)
         }
     }
 
     suspend fun deleteCashflow(ids: List<String>): Unit = withContext(Dispatchers.IO) {
         if (ids.isEmpty()) return@withContext
+        val idsFormatted = ids.joinToString(",") { java.net.URLEncoder.encode(it, "UTF-8") }
+
+        // 1. Delete from purchases table by client_id and id
         try {
-            val idsFormatted = ids.joinToString(",") { java.net.URLEncoder.encode(it, "UTF-8") }
-            var req = newRequestBuilder("daily_cashflow?id=in.($idsFormatted)")
-                .delete()
-                .build()
-            var resp = okHttpClient.newCall(req).execute()
-            if (resp.isSuccessful) return@withContext
+            val req1 = newRequestBuilder("purchases?client_id=in.($idsFormatted)").delete().build()
+            okHttpClient.newCall(req1).execute()
 
-            val err1 = resp.body?.string() ?: "HTTP ${resp.code}"
-
-            // Fallback for single ID: id=eq.xxx
-            if (ids.size == 1) {
-                val singleId = java.net.URLEncoder.encode(ids[0], "UTF-8")
-                req = newRequestBuilder("daily_cashflow?id=eq.$singleId")
-                    .delete()
-                    .build()
-                resp = okHttpClient.newCall(req).execute()
-                if (resp.isSuccessful) return@withContext
-            }
-
-            val err2 = resp.body?.string() ?: "HTTP ${resp.code}"
-            if (resp.code == 404 || err2.contains("PGRST200") || err2.contains("does not exist")) {
-                Log.w(tag, "Table daily_cashflow does not exist on Supabase: $err2")
-                return@withContext
-            }
-            throw Exception("Failed to delete cashflow: $err2")
+            val req2 = newRequestBuilder("purchases?id=in.($idsFormatted)").delete().build()
+            okHttpClient.newCall(req2).execute()
         } catch (e: Exception) {
-            val msg = e.message ?: ""
-            if (msg.contains("PGRST200") || msg.contains("404") || msg.contains("does not exist")) {
-                Log.w(tag, "Table daily_cashflow not found on Supabase: $msg")
-                return@withContext
-            }
-            throw e
+            Log.w(tag, "Delete from purchases table warning", e)
+        }
+
+        // 2. Delete from daily_cashflow table
+        try {
+            val req = newRequestBuilder("daily_cashflow?id=in.($idsFormatted)").delete().build()
+            okHttpClient.newCall(req).execute()
+        } catch (e: Exception) {
+            Log.w(tag, "Delete from daily_cashflow table warning", e)
         }
     }
 
@@ -411,6 +419,33 @@ class SupabaseClient(
         )
     }
 
+    fun parseCashflowFromPurchaseObj(obj: JSONObject): DailyCashflowRecord {
+        val clientId = obj.optString("client_id").ifEmpty { obj.optString("id") }
+        val supplier = obj.optString("supplier")
+        val isSale = obj.optString("type") == "SALE" || supplier.lowercase(Locale.ROOT).contains("sale")
+        val total = obj.optDouble("total", obj.optDouble("amount", 0.0))
+        val billDate = obj.optString("bill_date").ifEmpty { obj.optString("date") }
+        val category = obj.optString("category").ifEmpty {
+            if (supplier.isNotEmpty()) supplier else if (isSale) "Counter Sale" else "Purchase / Expense"
+        }
+        val title = obj.optString("title", supplier.ifEmpty { if (isSale) "Counter Sale" else "Purchase / Expense" })
+        val paymentMode = obj.optString("payment_mode", obj.optString("paymentMode", "Cash")).ifEmpty { "Cash" }
+        val note = obj.optString("note", obj.optString("bill_no", ""))
+        val createdAt = obj.optString("created_at", obj.optString("createdAt", ""))
+
+        return DailyCashflowRecord(
+            id = clientId,
+            type = if (isSale) "SALE" else "EXPENSE",
+            amount = total,
+            title = title,
+            category = category,
+            paymentMode = paymentMode,
+            date = billDate,
+            note = note,
+            createdAt = createdAt
+        )
+    }
+
     // Realtime WebSocket support matching Phoenix channels protocol
     fun connectRealtime(
         coroutineScope: CoroutineScope,
@@ -447,12 +482,39 @@ class SupabaseClient(
                                     put("schema", "public")
                                     put("table", "daily_cashflow")
                                 })
+                                put(JSONObject().apply {
+                                    put("event", "*")
+                                    put("schema", "public")
+                                    put("table", "purchases")
+                                })
                             }
                             put("postgres_changes", changeArr)
                         })
                     })
                 }
                 ws.send(joinMsg.toString())
+
+                // Join purchases topic for website WS compatibility
+                val joinPurchasesMsg = JSONObject().apply {
+                    put("topic", "realtime:public:purchases")
+                    put("event", "phx_join")
+                    put("ref", "join_purch_${System.currentTimeMillis()}")
+                    put("payload", JSONObject().apply {
+                        put("config", JSONObject().apply {
+                            put("broadcast", JSONObject().apply { put("self", false) })
+                            put("presence", JSONObject().apply { put("key", "") })
+                            val changeArr = JSONArray().apply {
+                                put(JSONObject().apply {
+                                    put("event", "*")
+                                    put("schema", "public")
+                                    put("table", "purchases")
+                                })
+                            }
+                            put("postgres_changes", changeArr)
+                        })
+                    })
+                }
+                ws.send(joinPurchasesMsg.toString())
 
                 // Start Phoenix heartbeat loop every 20 seconds
                 heartbeatJob?.cancel()
@@ -479,8 +541,8 @@ class SupabaseClient(
 
                     if (event == "phx_reply" && payload?.optString("status") == "ok") {
                         val topic = root.optString("topic")
-                        if (topic == "realtime:public:items") {
-                            Log.d(tag, "Subscribed to realtime:public:items successfully")
+                        if (topic == "realtime:public:items" || topic == "realtime:public:purchases") {
+                            Log.d(tag, "Subscribed to $topic successfully")
                             onStatusChanged(true)
                         }
                     } else if (event == "system" && payload?.optString("status") == "ok") {
@@ -501,6 +563,16 @@ class SupabaseClient(
                                 }
                             } else if (type == "DELETE") {
                                 val oldId = record?.optString("id") ?: oldRecord?.optString("id")
+                                onCashflowChanged?.invoke("DELETE", null, oldId)
+                            }
+                        } else if (table == "purchases") {
+                            if (type == "INSERT" || type == "UPDATE") {
+                                record?.let {
+                                    val cashflow = parseCashflowFromPurchaseObj(it)
+                                    onCashflowChanged?.invoke(type, cashflow, null)
+                                }
+                            } else if (type == "DELETE") {
+                                val oldId = record?.optString("client_id") ?: record?.optString("id") ?: oldRecord?.optString("client_id") ?: oldRecord?.optString("id")
                                 onCashflowChanged?.invoke("DELETE", null, oldId)
                             }
                         } else {
