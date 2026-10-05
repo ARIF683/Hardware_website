@@ -129,13 +129,10 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     loadLocal('quotations', [])
   );
   const [ledgerAccounts, setLedgerAccounts] = useState<LedgerAccount[]>(() => {
-    const list = loadLocal<LedgerAccount[]>('ledger_accounts', []);
-    // Purge sample mock accounts if present
-    return list.filter((a) => !a.id.startsWith('acc_1') && !a.id.startsWith('acc_2') && !a.id.startsWith('acc_3') && !a.id.startsWith('acc_4'));
+    return loadLocal<LedgerAccount[]>('ledger_accounts', []);
   });
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>(() => {
-    const list = loadLocal<LedgerEntry[]>('ledger_entries', []);
-    return list.filter((e) => !e.id.startsWith('entry_1') && !e.id.startsWith('entry_2') && !e.id.startsWith('entry_3') && !e.id.startsWith('entry_4'));
+    return loadLocal<LedgerEntry[]>('ledger_entries', []);
   });
   const [dailyCashflows, setDailyCashflows] = useState<DailyCashflowRecord[]>(() => {
     const list = loadLocal<DailyCashflowRecord[]>('daily_cashflows', []);
