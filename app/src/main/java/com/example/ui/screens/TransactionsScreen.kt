@@ -991,9 +991,34 @@ fun AddEditCashflowDialog(
     val todayDate = remember { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date()) }
 
     var type by remember { mutableStateOf(recordToEdit?.type ?: initialType) }
-    var amountText by remember { mutableStateOf(recordToEdit?.amount?.toString() ?: "") }
-    var title by remember { mutableStateOf(recordToEdit?.title ?: "") }
-    var category by remember { mutableStateOf(recordToEdit?.category ?: if (type == "SALE") "Counter Sale" else "Utilities") }
+
+    // Format initial amount without trailing .0 if integer
+    val initialAmountFormatted = recordToEdit?.amount?.let {
+        if (it % 1.0 == 0.0) it.toLong().toString() else it.toString()
+    } ?: ""
+
+    // Separate states for Sale and Expense so amounts never leak across types
+    var saleAmountText by remember {
+        mutableStateOf(if (recordToEdit?.type == "SALE") initialAmountFormatted else "")
+    }
+    var expenseAmountText by remember {
+        mutableStateOf(if (recordToEdit?.type == "EXPENSE") initialAmountFormatted else "")
+    }
+
+    var saleTitle by remember {
+        mutableStateOf(if (recordToEdit?.type == "SALE") recordToEdit.title else "")
+    }
+    var expenseTitle by remember {
+        mutableStateOf(if (recordToEdit?.type == "EXPENSE") recordToEdit.title else "")
+    }
+
+    var saleCategory by remember {
+        mutableStateOf(if (recordToEdit?.type == "SALE") recordToEdit.category else "Counter Sale")
+    }
+    var expenseCategory by remember {
+        mutableStateOf(if (recordToEdit?.type == "EXPENSE") recordToEdit.category else "Shop Rent")
+    }
+
     var paymentMode by remember { mutableStateOf(recordToEdit?.paymentMode ?: "Cash") }
     var date by remember { mutableStateOf(recordToEdit?.date ?: todayDate) }
     var note by remember { mutableStateOf(recordToEdit?.note ?: "") }
@@ -1001,6 +1026,11 @@ fun AddEditCashflowDialog(
     val saleCategories = listOf("Counter Sale", "Wholesale", "Retail", "Services", "Custom Work", "Other Sale")
     val expenseCategories = listOf("Shop Rent", "Electricity", "Staff Salary", "Transport/Freight", "Tea & Snacks", "Maintenance", "Packaging", "Tools", "Stationery", "Other Expense")
     val paymentModes = listOf("Cash", "UPI", "Card", "Bank Transfer", "Cheque")
+
+    val activeAmountText = if (type == "SALE") saleAmountText else expenseAmountText
+    val activeTitle = if (type == "SALE") saleTitle else expenseTitle
+    val activeCategory = if (type == "SALE") saleCategory else expenseCategory
+    val parsedAmount = activeAmountText.toDoubleOrNull() ?: 0.0
 
     Dialog(onDismissRequest = onDismiss) {
         Card(
@@ -1037,7 +1067,6 @@ fun AddEditCashflowDialog(
                     Button(
                         onClick = {
                             type = "SALE"
-                            if (category !in saleCategories) category = "Counter Sale"
                         },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (type == "SALE") SuccessGreen else MaterialTheme.colorScheme.surfaceVariant
@@ -1056,7 +1085,6 @@ fun AddEditCashflowDialog(
                     Button(
                         onClick = {
                             type = "EXPENSE"
-                            if (category !in expenseCategories) category = "Shop Rent"
                         },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (type == "EXPENSE") DangerRed else MaterialTheme.colorScheme.surfaceVariant
@@ -1077,11 +1105,19 @@ fun AddEditCashflowDialog(
 
                 // Amount
                 OutlinedTextField(
-                    value = amountText,
-                    onValueChange = { amountText = it },
+                    value = activeAmountText,
+                    onValueChange = { newVal ->
+                        // Accept digits and decimal
+                        val cleaned = newVal.filter { it.isDigit() || it == '.' }
+                        if (type == "SALE") {
+                            saleAmountText = cleaned
+                        } else {
+                            expenseAmountText = cleaned
+                        }
+                    },
                     label = { Text("Amount (₹) *") },
-                    placeholder = { Text("e.g. 1500") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    placeholder = { Text("0") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -1090,8 +1126,14 @@ fun AddEditCashflowDialog(
 
                 // Title / Description
                 OutlinedTextField(
-                    value = title,
-                    onValueChange = { title = it },
+                    value = activeTitle,
+                    onValueChange = { newVal ->
+                        if (type == "SALE") {
+                            saleTitle = newVal
+                        } else {
+                            expenseTitle = newVal
+                        }
+                    },
                     label = { Text("Title / Purpose *") },
                     placeholder = { Text(if (type == "SALE") "e.g. Counter Sale / Customer Name" else "e.g. Electricity Bill / Shop Rent") },
                     singleLine = true,
@@ -1109,12 +1151,17 @@ fun AddEditCashflowDialog(
                 ) {
                     val availableCats = if (type == "SALE") saleCategories else expenseCategories
                     items(availableCats) { catOpt ->
-                        val isSel = category.equals(catOpt, ignoreCase = true)
+                        val isSel = activeCategory.equals(catOpt, ignoreCase = true)
                         FilterChip(
                             selected = isSel,
                             onClick = {
-                                category = catOpt
-                                if (title.isBlank()) title = catOpt
+                                if (type == "SALE") {
+                                    saleCategory = catOpt
+                                    if (saleTitle.isBlank()) saleTitle = catOpt
+                                } else {
+                                    expenseCategory = catOpt
+                                    if (expenseTitle.isBlank()) expenseTitle = catOpt
+                                }
                             },
                             label = { Text(catOpt, fontSize = 11.sp) },
                             colors = FilterChipDefaults.filterChipColors(
@@ -1181,12 +1228,11 @@ fun AddEditCashflowDialog(
                 // Save Action Button
                 Button(
                     onClick = {
-                        val amount = amountText.toDoubleOrNull() ?: 0.0
-                        if (amount <= 0.0) return@Button
-                        val finalTitle = title.ifBlank { category }
-                        onSave(type, amount, finalTitle, category, paymentMode, date, note)
+                        if (parsedAmount <= 0.0) return@Button
+                        val finalTitle = activeTitle.ifBlank { activeCategory }
+                        onSave(type, parsedAmount, finalTitle, activeCategory, paymentMode, date, note)
                     },
-                    enabled = (amountText.toDoubleOrNull() ?: 0.0) > 0.0,
+                    enabled = parsedAmount > 0.0,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = if (type == "SALE") SuccessGreen else DangerRed
                     ),
