@@ -310,6 +310,12 @@ fun SettingsScreen(viewModel: StockViewModel) {
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
 
             SettingActionRow(
+                title = "Clear pending sync queue",
+                onClick = { viewModel.clearSyncQueue() }
+            )
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+
+            SettingActionRow(
                 title = "Reload from database",
                 onClick = { viewModel.reloadFromDatabase() }
             )

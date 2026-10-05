@@ -443,6 +443,13 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun clearSyncQueue() {
+        viewModelScope.launch {
+            repository.clearSyncQueue()
+            showToast("Pending sync queue cleared")
+        }
+    }
+
     fun reconnectRealtime() {
         viewModelScope.launch {
             repository.initRealtime(force = true)

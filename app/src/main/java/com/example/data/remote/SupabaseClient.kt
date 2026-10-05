@@ -249,42 +249,125 @@ class SupabaseClient(
     }
 
     suspend fun fetchAllCashflow(): List<DailyCashflowRecord> = withContext(Dispatchers.IO) {
-        val req = newRequestBuilder("daily_cashflow?select=*&order=created_at.desc&limit=2000")
-            .get()
-            .build()
-        val resp = okHttpClient.newCall(req).execute()
-        if (!resp.isSuccessful) {
-            val err = resp.body?.string() ?: "HTTP ${resp.code}"
-            throw Exception("Failed to load cashflow: $err")
+        try {
+            val req = newRequestBuilder("daily_cashflow?select=*&order=created_at.desc&limit=2000")
+                .get()
+                .build()
+            val resp = okHttpClient.newCall(req).execute()
+            if (!resp.isSuccessful) {
+                val err = resp.body?.string() ?: "HTTP ${resp.code}"
+                Log.w(tag, "Fetch cashflow non-success: $err")
+                return@withContext emptyList()
+            }
+            val body = resp.body?.string() ?: "[]"
+            cashflowListAdapter.fromJson(body) ?: emptyList()
+        } catch (e: Exception) {
+            Log.w(tag, "Failed to load cashflow from remote", e)
+            emptyList()
         }
-        val body = resp.body?.string() ?: "[]"
-        cashflowListAdapter.fromJson(body) ?: emptyList()
     }
 
     suspend fun upsertCashflow(records: List<DailyCashflowRecord>): Unit = withContext(Dispatchers.IO) {
         if (records.isEmpty()) return@withContext
-        val json = cashflowListAdapter.toJson(records)
-        val req = newRequestBuilder("daily_cashflow?on_conflict=id")
-            .addHeader("Prefer", "resolution=merge-duplicates,return=minimal")
-            .post(json.toRequestBody(jsonMediaType))
-            .build()
-        val resp = okHttpClient.newCall(req).execute()
-        if (!resp.isSuccessful) {
-            val err = resp.body?.string() ?: "HTTP ${resp.code}"
-            throw Exception("Failed to upsert cashflow: $err")
+
+        try {
+            // 1. Try on_conflict=id upsert first
+            val json = cashflowListAdapter.toJson(records)
+            var req = newRequestBuilder("daily_cashflow?on_conflict=id")
+                .addHeader("Prefer", "resolution=merge-duplicates,return=minimal")
+                .post(json.toRequestBody(jsonMediaType))
+                .build()
+            var resp = okHttpClient.newCall(req).execute()
+            if (resp.isSuccessful) return@withContext
+
+            val err1 = resp.body?.string() ?: "HTTP ${resp.code}"
+            Log.w(tag, "First attempt to upsert cashflow failed: $err1. Trying plain POST...")
+
+            // 2. Try plain POST without on_conflict (in case no unique constraint on id)
+            req = newRequestBuilder("daily_cashflow")
+                .addHeader("Prefer", "return=minimal")
+                .post(json.toRequestBody(jsonMediaType))
+                .build()
+            resp = okHttpClient.newCall(req).execute()
+            if (resp.isSuccessful) return@withContext
+
+            val err2 = resp.body?.string() ?: "HTTP ${resp.code}"
+            Log.w(tag, "Second attempt to insert cashflow failed: $err2. Trying explicit JSON payload...")
+
+            // 3. Explicit JSON formatting for Postgres column names
+            val jsonArray = JSONArray()
+            for (rec in records) {
+                val obj = JSONObject().apply {
+                    put("id", rec.id)
+                    put("type", rec.type)
+                    put("amount", rec.amount)
+                    put("title", rec.title)
+                    put("category", rec.category)
+                    put("payment_mode", rec.paymentMode)
+                    put("date", rec.date)
+                    put("note", rec.note)
+                    put("created_at", rec.createdAt)
+                }
+                jsonArray.put(obj)
+            }
+            req = newRequestBuilder("daily_cashflow")
+                .addHeader("Prefer", "return=minimal")
+                .post(jsonArray.toString().toRequestBody(jsonMediaType))
+                .build()
+            resp = okHttpClient.newCall(req).execute()
+            if (resp.isSuccessful) return@withContext
+
+            val err3 = resp.body?.string() ?: "HTTP ${resp.code}"
+            if (resp.code == 404 || err3.contains("PGRST200") || err3.contains("does not exist")) {
+                Log.w(tag, "Table daily_cashflow does not exist on Supabase: $err3")
+                return@withContext
+            }
+            throw Exception("Failed to upsert cashflow: $err3")
+        } catch (e: Exception) {
+            val msg = e.message ?: ""
+            if (msg.contains("PGRST200") || msg.contains("404") || msg.contains("does not exist")) {
+                Log.w(tag, "Table daily_cashflow not found on Supabase: $msg")
+                return@withContext
+            }
+            throw e
         }
     }
 
     suspend fun deleteCashflow(ids: List<String>): Unit = withContext(Dispatchers.IO) {
         if (ids.isEmpty()) return@withContext
-        val idsFormatted = ids.joinToString(",") { java.net.URLEncoder.encode(it, "UTF-8") }
-        val req = newRequestBuilder("daily_cashflow?id=in.($idsFormatted)")
-            .delete()
-            .build()
-        val resp = okHttpClient.newCall(req).execute()
-        if (!resp.isSuccessful) {
-            val err = resp.body?.string() ?: "HTTP ${resp.code}"
-            throw Exception("Failed to delete cashflow: $err")
+        try {
+            val idsFormatted = ids.joinToString(",") { java.net.URLEncoder.encode(it, "UTF-8") }
+            var req = newRequestBuilder("daily_cashflow?id=in.($idsFormatted)")
+                .delete()
+                .build()
+            var resp = okHttpClient.newCall(req).execute()
+            if (resp.isSuccessful) return@withContext
+
+            val err1 = resp.body?.string() ?: "HTTP ${resp.code}"
+
+            // Fallback for single ID: id=eq.xxx
+            if (ids.size == 1) {
+                val singleId = java.net.URLEncoder.encode(ids[0], "UTF-8")
+                req = newRequestBuilder("daily_cashflow?id=eq.$singleId")
+                    .delete()
+                    .build()
+                resp = okHttpClient.newCall(req).execute()
+                if (resp.isSuccessful) return@withContext
+            }
+
+            val err2 = resp.body?.string() ?: "HTTP ${resp.code}"
+            if (resp.code == 404 || err2.contains("PGRST200") || err2.contains("does not exist")) {
+                Log.w(tag, "Table daily_cashflow does not exist on Supabase: $err2")
+                return@withContext
+            }
+            throw Exception("Failed to delete cashflow: $err2")
+        } catch (e: Exception) {
+            val msg = e.message ?: ""
+            if (msg.contains("PGRST200") || msg.contains("404") || msg.contains("does not exist")) {
+                Log.w(tag, "Table daily_cashflow not found on Supabase: $msg")
+                return@withContext
+            }
+            throw e
         }
     }
 

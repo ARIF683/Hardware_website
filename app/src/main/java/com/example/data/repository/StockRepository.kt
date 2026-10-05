@@ -554,59 +554,82 @@ class StockRepository(
         _syncStatus.value = "Syncing ${queue.size} pending…"
 
         try {
+            val opsToDelete = mutableListOf<Long>()
+            var lastErrorMsg: String? = null
+
             for (op in queue) {
-                when (op.type) {
-                    "upsert" -> {
-                        val items = itemListAdapter.fromJson(op.payloadJson) ?: emptyList()
-                        supabaseClient.upsertItems(items)
-                    }
-                    "patch" -> {
-                        val json = JSONObject(op.payloadJson)
-                        val id = json.getString("id")
-                        val patch = json.getJSONObject("patch").toString()
-                        supabaseClient.patchItem(id, patch)
-                    }
-                    "delete" -> {
-                        supabaseClient.deleteItems(listOf(op.payloadJson))
-                    }
-                    "deleteBatch" -> {
-                        val ids = op.payloadJson.split(",").filter { it.isNotEmpty() }
-                        supabaseClient.deleteItems(ids)
-                    }
-                    "deleteAll" -> {
-                        supabaseClient.deleteAllItems()
-                    }
-                    "tx" -> {
-                        val txs = txListAdapter.fromJson(op.payloadJson) ?: emptyList()
-                        supabaseClient.insertTransactions(txs)
-                    }
-                    "clearTx" -> {
-                        supabaseClient.clearTransactions()
-                    }
-                    "purchase" -> {
-                        val pur = purchaseAdapter.fromJson(op.payloadJson)
-                        if (pur != null) {
-                            supabaseClient.insertPurchase(pur)
+                try {
+                    when (op.type) {
+                        "upsert" -> {
+                            val items = itemListAdapter.fromJson(op.payloadJson) ?: emptyList()
+                            supabaseClient.upsertItems(items)
+                        }
+                        "patch" -> {
+                            val json = JSONObject(op.payloadJson)
+                            val id = json.getString("id")
+                            val patch = json.getJSONObject("patch").toString()
+                            supabaseClient.patchItem(id, patch)
+                        }
+                        "delete" -> {
+                            supabaseClient.deleteItems(listOf(op.payloadJson))
+                        }
+                        "deleteBatch" -> {
+                            val ids = op.payloadJson.split(",").filter { it.isNotEmpty() }
+                            supabaseClient.deleteItems(ids)
+                        }
+                        "deleteAll" -> {
+                            supabaseClient.deleteAllItems()
+                        }
+                        "tx" -> {
+                            val txs = txListAdapter.fromJson(op.payloadJson) ?: emptyList()
+                            supabaseClient.insertTransactions(txs)
+                        }
+                        "clearTx" -> {
+                            supabaseClient.clearTransactions()
+                        }
+                        "purchase" -> {
+                            val pur = purchaseAdapter.fromJson(op.payloadJson)
+                            if (pur != null) {
+                                supabaseClient.insertPurchase(pur)
+                            }
+                        }
+                        "upsertCashflow" -> {
+                            val records = cashflowListAdapter.fromJson(op.payloadJson) ?: emptyList()
+                            supabaseClient.upsertCashflow(records)
+                        }
+                        "deleteCashflow" -> {
+                            supabaseClient.deleteCashflow(listOf(op.payloadJson))
                         }
                     }
-                    "upsertCashflow" -> {
-                        val records = cashflowListAdapter.fromJson(op.payloadJson) ?: emptyList()
-                        supabaseClient.upsertCashflow(records)
-                    }
-                    "deleteCashflow" -> {
-                        supabaseClient.deleteCashflow(listOf(op.payloadJson))
-                    }
+                    opsToDelete.add(op.id)
+                } catch (e: Exception) {
+                    Log.e(tag, "Error processing sync item #${op.id} (${op.type})", e)
+                    lastErrorMsg = e.message
                 }
-                database.syncQueueDao().deleteById(op.id)
             }
-            _syncStatus.value = "Synced ✓"
+
+            for (id in opsToDelete) {
+                database.syncQueueDao().deleteById(id)
+            }
+
+            val remaining = database.syncQueueDao().getAll().size
+            if (remaining == 0) {
+                _syncStatus.value = "Synced ✓"
+            } else {
+                _syncStatus.value = "Pending $remaining · ${lastErrorMsg ?: "retry soon"}"
+            }
         } catch (e: Exception) {
             Log.e(tag, "Queue flush failed", e)
             val remaining = database.syncQueueDao().getAll().size
-            _syncStatus.value = "Pending $remaining · retry soon"
+            _syncStatus.value = "Pending $remaining · ${e.message ?: "retry soon"}"
         } finally {
             isFlushing = false
         }
+    }
+
+    suspend fun clearSyncQueue() = withContext(Dispatchers.IO) {
+        database.syncQueueDao().deleteAll()
+        _syncStatus.value = "Synced ✓"
     }
 
     // ==================== QUOTATIONS / ESTIMATES ====================
