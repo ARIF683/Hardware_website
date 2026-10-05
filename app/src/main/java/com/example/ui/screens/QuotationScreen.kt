@@ -537,9 +537,10 @@ fun QuotationFormDialog(
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             val spoken = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
             if (!spoken.isNullOrBlank()) {
+                val normalized = com.example.util.ItemSearchMatcher.normalizeVoiceInput(spoken)
                 val target = voiceTargetIdx
                 if (target != null && target in lineItems.indices) {
-                    lineItems[target] = lineItems[target].copy(name = spoken)
+                    lineItems[target] = lineItems[target].copy(name = normalized)
                 }
             }
         }
@@ -672,31 +673,21 @@ fun QuotationFormDialog(
                         var isSuggestionsOpen by remember { mutableStateOf(false) }
 
                         val matchingItems = remember(item.name, item.type, availableItems) {
-                            val q = item.name.trim().lowercase(Locale.ROOT)
+                            val q = item.name.trim()
                             val curType = item.type.trim()
                             if (q.isBlank() && curType.isBlank()) {
                                 emptyList()
                             } else {
-                                availableItems.filter { dbItem ->
+                                availableItems.mapNotNull { dbItem ->
                                     val typeMatch = curType.isBlank() || curType.equals("All", ignoreCase = true) ||
                                             dbItem.type.trim().equals(curType, ignoreCase = true)
-                                    val nameMatch = q.isBlank() ||
-                                            dbItem.name.lowercase(Locale.ROOT).contains(q) ||
-                                            dbItem.code.lowercase(Locale.ROOT).contains(q) ||
-                                            dbItem.barcode.lowercase(Locale.ROOT).contains(q) ||
-                                            dbItem.brand.lowercase(Locale.ROOT).contains(q) ||
-                                            dbItem.type.lowercase(Locale.ROOT).contains(q) ||
-                                            dbItem.aliases.lowercase(Locale.ROOT).contains(q)
-                                    if (curType.isNotBlank() && !curType.equals("All", ignoreCase = true)) {
-                                        typeMatch && nameMatch
-                                    } else {
-                                        nameMatch
-                                    }
-                                }.sortedWith(
-                                    compareByDescending<Item> { dbItem ->
-                                        if (dbItem.name.lowercase(Locale.ROOT).startsWith(q) && q.isNotEmpty()) 2 else 1
-                                    }.thenBy { it.name }
-                                ).take(25)
+                                    if (!typeMatch) return@mapNotNull null
+
+                                    val score = if (q.isBlank()) 1 else com.example.util.ItemSearchMatcher.matchScore(dbItem, q)
+                                    if (score > 0) Pair(dbItem, score) else null
+                                }.sortedByDescending { it.second }
+                                .map { it.first }
+                                .take(25)
                             }
                         }
 
@@ -768,9 +759,14 @@ fun QuotationFormDialog(
                                                         .fillMaxWidth()
                                                         .clickable {
                                                             val curQty = if (item.qty <= 0.0) 1.0 else item.qty
+                                                            val displayName = if (matched.size.isNotBlank() && !matched.name.contains(matched.size, ignoreCase = true)) {
+                                                                "${matched.name} ${matched.size}"
+                                                            } else {
+                                                                matched.name
+                                                            }
                                                             val updated = item.copy(
                                                                 itemId = matched.id,
-                                                                name = matched.name,
+                                                                name = displayName,
                                                                 code = matched.code,
                                                                 type = if (matched.type.isNotBlank()) matched.type else item.type,
                                                                 unit = matched.unit.ifBlank { "pcs" },
@@ -788,7 +784,27 @@ fun QuotationFormDialog(
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
                                                     Column(modifier = Modifier.weight(1f)) {
-                                                        Text(matched.name, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                        ) {
+                                                            Text(matched.name, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                                            if (matched.size.isNotBlank()) {
+                                                                Surface(
+                                                                    color = BrandBlue.copy(alpha = 0.14f),
+                                                                    shape = RoundedCornerShape(4.dp),
+                                                                    border = androidx.compose.foundation.BorderStroke(1.dp, BrandBlue.copy(alpha = 0.35f))
+                                                                ) {
+                                                                    Text(
+                                                                        text = matched.size,
+                                                                        fontSize = 10.sp,
+                                                                        fontWeight = FontWeight.ExtraBold,
+                                                                        color = BrandBlue,
+                                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
                                                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                                             if (matched.type.isNotBlank()) {
                                                                 Surface(

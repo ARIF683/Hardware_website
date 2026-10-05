@@ -100,7 +100,8 @@ fun ItemsScreen(
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             val spokenText = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
             if (!spokenText.isNullOrBlank()) {
-                viewModel.searchQuery.value = spokenText
+                val normalized = com.example.util.ItemSearchMatcher.normalizeVoiceInput(spokenText)
+                viewModel.searchQuery.value = normalized
             }
         }
     }
@@ -472,15 +473,14 @@ fun ItemRowCard(
         StockViewModel.formatRupees(item.cost),
         StockViewModel.formatRupees(item.price),
         item.type.takeIf { it.isNotBlank() },
-        item.brand.takeIf { it.isNotBlank() },
-        item.size.takeIf { it.isNotBlank() }
+        item.brand.takeIf { it.isNotBlank() }
     ).joinToString("  ·  ")
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (isSelectionMode) {
@@ -509,18 +509,44 @@ fun ItemRowCard(
         }
 
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = item.name,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-                maxLines = 2
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = item.name,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+
+                if (item.size.isNotBlank()) {
+                    Surface(
+                        color = BrandBlue.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(4.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, BrandBlue.copy(alpha = 0.35f))
+                    ) {
+                        Text(
+                            text = item.size,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = BrandBlue,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+
             Spacer(modifier = Modifier.height(2.dp))
+
             Text(
                 text = tags,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
+                maxLines = 2,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
             )
         }
 

@@ -259,37 +259,8 @@ class StockViewModel(application: Application) : AndroidViewModel(application) {
         // Search matching
         val trimmedQuery = filters.query.trim()
         if (trimmedQuery.isNotEmpty()) {
-            val qLower = trimmedQuery.lowercase(Locale.ROOT)
-            val cleanQuery = qLower.replace(Regex("[^\\p{L}\\p{N}]+"), "")
-            val tokens = qLower.split(Regex("\\s+")).filter { it.isNotEmpty() }
-
             val scored = list.mapNotNull { item: Item ->
-                val nameLower = item.name.lowercase(Locale.ROOT)
-                val codeLower = item.code.lowercase(Locale.ROOT)
-                val barcodeLower = item.barcode.lowercase(Locale.ROOT)
-                val typeLower = item.type.lowercase(Locale.ROOT)
-                val brandLower = item.brand.lowercase(Locale.ROOT)
-                val sizeLower = item.size.lowercase(Locale.ROOT)
-                val aliasesLower = item.aliases.lowercase(Locale.ROOT)
-
-                val nameClean = nameLower.replace(Regex("[^\\p{L}\\p{N}]+"), "")
-                val hay = "$nameLower $sizeLower $brandLower $typeLower $codeLower $barcodeLower ${item.mrp ?: ""} ${item.unit} $aliasesLower"
-                val hayClean = hay.replace(Regex("[^\\p{L}\\p{N}]+"), "")
-
-                val score = when {
-                    nameLower == qLower || codeLower == qLower || barcodeLower == qLower -> 100
-                    nameLower.startsWith(qLower) -> 80
-                    nameClean.contains(cleanQuery) && cleanQuery.isNotEmpty() -> 60
-                    nameLower.contains(qLower) -> 50
-                    tokens.all { nameLower.contains(it) } -> 40
-                    codeLower.contains(qLower) || barcodeLower.contains(qLower) -> 35
-                    typeLower.contains(qLower) || brandLower.contains(qLower) || sizeLower.contains(qLower) -> 30
-                    aliasesLower.contains(qLower) -> 25
-                    hayClean.contains(cleanQuery) && cleanQuery.isNotEmpty() -> 20
-                    tokens.all { hay.contains(it) } -> 15
-                    tokens.any { hay.contains(it) } -> 5
-                    else -> 0
-                }
+                val score = com.example.util.ItemSearchMatcher.matchScore(item, trimmedQuery)
                 if (score > 0) Pair(item, score) else null
             }
 

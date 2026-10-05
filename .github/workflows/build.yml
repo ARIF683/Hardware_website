@@ -60,8 +60,24 @@ jobs:
             Automatic build from commit ${{ github.sha }}.
             version_code: ${{ github.run_number }}
             version_name: 1.0.${{ github.run_number }}
-
             Download **StockManager.apk** below to install.
           files: release-artifacts/StockManager.apk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Keep only the latest 2 releases (delete older)
+        run: |
+          echo "Checking releases to keep only the latest 2..."
+          # gh release list outputs releases newest first.
+          # Skip the first 2 releases and delete any older releases and tags.
+          OLD_RELEASES=$(gh release list --limit 100 --json tagName --jq '.[2:][].tagName')
+          if [ -z "$OLD_RELEASES" ]; then
+            echo "No older releases to delete (less than or equal to 2 releases exist)."
+          else
+            for tag in $OLD_RELEASES; do
+              echo "Pruning older release and tag: $tag"
+              gh release delete "$tag" --yes --cleanup-tag || true
+            done
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
