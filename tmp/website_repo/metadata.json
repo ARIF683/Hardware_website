@@ -1,0 +1,6 @@
+{
+  "name": "Stock Manager - Hardware & Billing Hub",
+  "description": "Hardware inventory, stock tracking, bill entry, quotations, ledger khata, and cashflow manager",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
