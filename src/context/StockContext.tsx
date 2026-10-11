@@ -40,7 +40,7 @@ interface StockContextType {
   // Supabase sync state
   supabaseStatus: 'connected' | 'connecting' | 'offline';
   isRealtimeLive: boolean;
-  refreshFromSupabase: () => Promise<void>;
+  refreshFromSupabase: (isSilent?: boolean) => Promise<void>;
 
   // Auth & Admin
   isAuthed: boolean;
@@ -243,10 +243,18 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => saveLocal('admin_pin', adminPin), [adminPin]);
 
   // Initial fetch from live Supabase DB
-  const refreshFromSupabase = useCallback(async () => {
-    setSupabaseStatus('connecting');
+  const refreshFromSupabase = useCallback(async (isSilent = false) => {
+    if (!isSilent) setSupabaseStatus('connecting');
     try {
-      const [remoteItems, remoteTx, remoteCashflows, remoteQuotes, remoteLedgerAcc, remoteLedgerEntries, remoteStoreProfile] = await Promise.all([
+      const [
+        itemsResult,
+        txResult,
+        cashflowsResult,
+        quotesResult,
+        ledgerAccResult,
+        ledgerEntriesResult,
+        storeProfileResult
+      ] = await Promise.allSettled([
         supabaseService.fetchAllItems(),
         supabaseService.fetchTransactions(),
         supabaseService.fetchDailyCashflows(),
@@ -256,34 +264,46 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         supabaseService.fetchStoreProfile()
       ]);
 
-      if (remoteItems && remoteItems.length > 0) {
-        setItems(remoteItems);
-        setSupabaseStatus('connected');
-        showToast(`Synced ${remoteItems.length} items from Supabase database!`);
-      } else {
-        setSupabaseStatus('connected');
+      let anySuccess = false;
+
+      if (itemsResult.status === 'fulfilled' && itemsResult.value) {
+        const remoteItems = itemsResult.value;
+        if (remoteItems.length > 0) {
+          setItems(remoteItems);
+          if (!isSilent) {
+            showToast(`Synced ${remoteItems.length} items from Supabase database!`);
+          }
+        }
+        anySuccess = true;
       }
 
-      if (remoteTx && remoteTx.length > 0) {
-        setTransactions(remoteTx);
+      if (txResult.status === 'fulfilled' && txResult.value && txResult.value.length > 0) {
+        setTransactions(txResult.value);
+        anySuccess = true;
       }
 
-      if (remoteCashflows && remoteCashflows.length > 0) {
-        setDailyCashflows(remoteCashflows);
+      if (cashflowsResult.status === 'fulfilled' && cashflowsResult.value && cashflowsResult.value.length > 0) {
+        setDailyCashflows(cashflowsResult.value);
+        anySuccess = true;
       }
 
-      if (remoteQuotes && remoteQuotes.length > 0) {
-        setQuotations(remoteQuotes);
+      if (quotesResult.status === 'fulfilled' && quotesResult.value && quotesResult.value.length > 0) {
+        setQuotations(quotesResult.value);
+        anySuccess = true;
       }
 
-      if (remoteLedgerAcc && remoteLedgerAcc.length > 0) {
-        setLedgerAccounts(remoteLedgerAcc);
+      if (ledgerAccResult.status === 'fulfilled' && ledgerAccResult.value && ledgerAccResult.value.length > 0) {
+        setLedgerAccounts(ledgerAccResult.value);
+        anySuccess = true;
       }
 
-      if (remoteLedgerEntries && remoteLedgerEntries.length > 0) {
-        setLedgerEntries(remoteLedgerEntries);
+      if (ledgerEntriesResult.status === 'fulfilled' && ledgerEntriesResult.value && ledgerEntriesResult.value.length > 0) {
+        setLedgerEntries(ledgerEntriesResult.value);
+        anySuccess = true;
       }
-      if (remoteStoreProfile) {
+
+      if (storeProfileResult.status === 'fulfilled' && storeProfileResult.value) {
+        const remoteStoreProfile = storeProfileResult.value;
         if (remoteStoreProfile.bannerUrl !== undefined) {
           setBannerUrl(remoteStoreProfile.bannerUrl);
           saveLocal("store_custom_banner", remoteStoreProfile.bannerUrl);
@@ -295,6 +315,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             setShopProfile((prev) => ({ ...prev, logo: remoteStoreProfile.logoUrl! }));
           }
         }
+        anySuccess = true;
+      }
+
+      if (anySuccess) {
+        setSupabaseStatus('connected');
+      } else {
+        setSupabaseStatus('offline');
       }
     } catch (e) {
       console.warn('Could not sync with Supabase, using local cache', e);
@@ -321,43 +348,62 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
         }
       },
-      onItemChanged: (type: string, record: any) => {
+      onItemChanged: (type: string, record: any, oldId?: string) => {
         setIsRealtimeLive(true);
         if (type === 'INSERT' || type === 'UPDATE') {
           if (record && record.id) {
             setItems((prev) => {
               const idx = prev.findIndex((i) => i.id === record.id);
-              const mappedItem: Item = {
-                id: record.id,
-                o: record.o || 0,
-                name: record.name || '',
-                code: record.code || '',
-                barcode: record.barcode || '',
-                type: record.type || 'General',
-                brand: record.brand || '',
-                size: record.size || '',
-                aliases: record.aliases || '',
-                mrp: record.mrp || null,
-                cost: Number(record.cost || 0),
-                price: Number(record.price || 0),
-                qty: Number(record.qty || 0),
-                low: Number(record.low || 0),
-                unit: record.unit || 'pcs',
-                imageUrl: record.image_url ? String(record.image_url) : null,
-                updatedAt: record.updated_at || new Date().toISOString()
-              };
               if (idx >= 0) {
+                const existing = prev[idx];
                 const updated = [...prev];
-                updated[idx] = mappedItem;
+                updated[idx] = {
+                  ...existing,
+                  name: record.name !== undefined && record.name ? record.name : existing.name,
+                  code: record.code !== undefined ? record.code : existing.code,
+                  barcode: record.barcode !== undefined ? record.barcode : existing.barcode,
+                  type: record.type !== undefined ? record.type : existing.type,
+                  brand: record.brand !== undefined ? record.brand : existing.brand,
+                  size: record.size !== undefined ? record.size : existing.size,
+                  aliases: record.aliases !== undefined ? record.aliases : existing.aliases,
+                  mrp: record.mrp !== undefined ? record.mrp : existing.mrp,
+                  cost: record.cost !== undefined ? Number(record.cost) : existing.cost,
+                  price: record.price !== undefined ? Number(record.price) : existing.price,
+                  qty: record.qty !== undefined ? Number(record.qty) : existing.qty,
+                  low: record.low !== undefined ? Number(record.low) : existing.low,
+                  unit: record.unit !== undefined ? record.unit : existing.unit,
+                  imageUrl: record.image_url !== undefined ? (record.image_url ? String(record.image_url) : null) : existing.imageUrl,
+                  updatedAt: record.updated_at || new Date().toISOString()
+                };
                 return updated;
               } else {
+                const mappedItem: Item = {
+                  id: record.id,
+                  o: record.o || prev.length + 1,
+                  name: record.name || 'New Item',
+                  code: record.code || '',
+                  barcode: record.barcode || '',
+                  type: record.type || 'General Hardware',
+                  brand: record.brand || '',
+                  size: record.size || '',
+                  aliases: record.aliases || '',
+                  mrp: record.mrp || null,
+                  cost: Number(record.cost || 0),
+                  price: Number(record.price || 0),
+                  qty: Number(record.qty || 0),
+                  low: Number(record.low || 0),
+                  unit: record.unit || 'pcs',
+                  imageUrl: record.image_url ? String(record.image_url) : null,
+                  updatedAt: record.updated_at || new Date().toISOString()
+                };
                 return [mappedItem, ...prev];
               }
             });
           }
         } else if (type === 'DELETE') {
-          if (record && record.id) {
-            setItems((prev) => prev.filter((i) => i.id !== record.id));
+          const targetId = record?.id || oldId;
+          if (targetId) {
+            setItems((prev) => prev.filter((i) => i.id !== targetId));
           }
         }
       },
@@ -525,7 +571,24 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     });
 
+    // Auto-sync when user returns to this tab / unlocks phone
+    const handleVisibilityOrFocus = () => {
+      if (document.visibilityState === 'visible') {
+        refreshFromSupabase(true);
+      }
+    };
+    window.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    window.addEventListener('focus', handleVisibilityOrFocus);
+
+    // Periodic background sync every 25 seconds to guarantee cross-device consistency
+    const pollInterval = setInterval(() => {
+      refreshFromSupabase(true);
+    }, 25000);
+
     return () => {
+      window.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      clearInterval(pollInterval);
       supabaseService.disconnectRealtime();
     };
   }, [refreshFromSupabase]);
@@ -760,7 +823,10 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
 
     // Sync qty to Supabase
-    supabaseService.updateItemQty(itemId, newQty).catch((err) => console.error(err));
+    supabaseService.updateItemQty(itemId, newQty).catch((err) => {
+      console.error('Remote sync stock update error:', err);
+      showToast(`Warning: Stock updated locally, but remote DB sync failed: ${err?.message || 'Error'}`);
+    });
 
     // Add transaction record
     const newTx: TransactionRecord = {

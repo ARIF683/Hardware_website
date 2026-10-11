@@ -36,7 +36,8 @@ export const LedgerScreen: React.FC<LedgerScreenProps> = ({ onOpenPrintStatement
     deleteLedgerAccount,
     addLedgerEntry,
     deleteLedgerEntry,
-    shopProfile
+    shopProfile,
+    showToast
   } = useStock();
 
   const [activeTypeTab, setActiveTypeTab] = useState<LedgerAccountType>('CUSTOMER');
@@ -136,7 +137,7 @@ export const LedgerScreen: React.FC<LedgerScreenProps> = ({ onOpenPrintStatement
 
   const sendWhatsAppReminder = (account: LedgerAccount) => {
     if (!account.phone) {
-      alert('No phone number saved for this account');
+      showToast('No phone number saved for this account');
       return;
     }
     const cleanPhone = account.phone.replace(/[^0-9]/g, '');
@@ -150,7 +151,11 @@ export const LedgerScreen: React.FC<LedgerScreenProps> = ({ onOpenPrintStatement
       `Thank you!\n` +
       `${shopProfile.name} (${shopProfile.phone})`
     );
-    window.open(`https://wa.me/${cleanPhone}?text=${text}`, '_blank');
+    const link = document.createElement('a');
+    link.href = `https://wa.me/${cleanPhone}?text=${text}`;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.click();
   };
 
   return (

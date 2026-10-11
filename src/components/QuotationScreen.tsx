@@ -34,7 +34,8 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
     updateQuotation,
     deleteQuotation,
     convertQuotationToBill,
-    shopProfile
+    shopProfile,
+    showToast
   } = useStock();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -176,7 +177,7 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
     e.preventDefault();
     const validLines = lineItems.filter((i) => i.name.trim().length > 0);
     if (validLines.length === 0) {
-      alert('Add at least one item with a valid name');
+      showToast('Add at least one item with a valid name');
       return;
     }
 
@@ -236,7 +237,11 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
     const url = quote.customerPhone
       ? `https://wa.me/${quote.customerPhone.replace(/[^0-9]/g, '')}?text=${text}`
       : `https://wa.me/?text=${text}`;
-    window.open(url, '_blank');
+    const link = document.createElement('a');
+    link.href = url;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.click();
   };
 
   // Filtered quotes

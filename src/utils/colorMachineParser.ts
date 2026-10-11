@@ -194,8 +194,10 @@ export function findBestMatchingItem(
     // Base name / code matching (e.g. TE15, BASE 01, WHITE)
     if (bClean) {
       if (itemCodeUpper === bClean || itemBarcodeUpper === bClean) {
-        score += 80;
-      } else if (itemNameUpper === bClean || itemNameUpper.includes(bClean)) {
+        score += 100; // Increased priority for exact code/barcode match
+      } else if (itemNameUpper === bClean) {
+        score += 90; // Increased priority for exact name match
+      } else if (itemNameUpper.includes(bClean)) {
         score += 60;
       } else if (itemAliasesUpper.includes(bClean)) {
         score += 50;
@@ -203,8 +205,12 @@ export function findBestMatchingItem(
     }
 
     // Product name matching
-    if (pClean && itemNameUpper.includes(pClean)) {
-      score += 40;
+    if (pClean) {
+      if (itemNameUpper === pClean) {
+        score += 100; // Increased priority for exact product name match
+      } else if (itemNameUpper.includes(pClean)) {
+        score += 40;
+      }
     } else if (productTokens.length > 0) {
       for (const token of productTokens) {
         if (itemNameUpper.includes(token)) {

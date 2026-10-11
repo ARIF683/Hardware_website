@@ -139,7 +139,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                       ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                       : supabaseStatus === 'connecting'
                       ? 'bg-amber-50 text-amber-700 border-amber-200'
-                      : 'bg-slate-100 text-slate-600 border-slate-200'
+                      : 'bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-100'
                   }`}
                 >
                   <span
@@ -148,12 +148,16 @@ export const Navbar: React.FC<NavbarProps> = ({
                         ? 'bg-emerald-500 animate-pulse'
                         : supabaseStatus === 'connecting'
                         ? 'bg-amber-500 animate-ping'
-                        : 'bg-slate-400'
+                        : 'bg-rose-500'
                     }`}
                   />
                   <Cloud className="w-2.5 h-2.5" />
                   <span className="hidden sm:inline">
-                    {supabaseStatus === 'connected' ? `Supabase (${items.length})` : 'Syncing…'}
+                    {supabaseStatus === 'connected'
+                      ? `Supabase (${items.length})`
+                      : supabaseStatus === 'connecting'
+                      ? 'Syncing…'
+                      : 'Offline (Retry)'}
                   </span>
                   <RefreshCw className={`w-2.5 h-2.5 ${isRefreshing ? 'animate-spin' : ''}`} />
                 </button>

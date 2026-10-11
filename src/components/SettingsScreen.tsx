@@ -24,7 +24,7 @@ import {
 import { ColorMachineTintModal } from './ColorMachineTintModal';
 import { useStock } from '../context/StockContext';
 import { ShopProfile } from '../types';
-import { SUPABASE_URL, SUPABASE_KEY, supabaseService } from '../services/supabaseService';
+import { SUPABASE_URL, SUPABASE_KEY, supabaseService, cleanSupabaseUrl } from '../services/supabaseService';
 
 export const SettingsScreen: React.FC = () => {
   const {
@@ -66,7 +66,7 @@ export const SettingsScreen: React.FC = () => {
 
   // Supabase live config
   const [supabaseUrl, setSupabaseUrl] = useState(
-    () => localStorage.getItem('hardware_supabase_url') || SUPABASE_URL
+    () => cleanSupabaseUrl(localStorage.getItem('hardware_supabase_url') || SUPABASE_URL)
   );
   const [supabaseKey, setSupabaseKey] = useState(
     () => localStorage.getItem('hardware_supabase_key') || SUPABASE_KEY
@@ -114,11 +114,29 @@ export const SettingsScreen: React.FC = () => {
     }
   };
 
-  const handleSaveSupabase = (e: React.FormEvent) => {
+  const handleSaveSupabase = async (e: React.FormEvent) => {
     e.preventDefault();
-    localStorage.setItem('hardware_supabase_url', supabaseUrl.trim());
-    localStorage.setItem('hardware_supabase_key', supabaseKey.trim());
-    showToast('Supabase settings saved');
+    const sanitizedUrl = cleanSupabaseUrl(supabaseUrl);
+    const sanitizedKey = (supabaseKey || '').trim().replace(/^Bearer\s+/i, '').replace(/^["']+|["']+$/g, '').trim();
+    setSupabaseUrl(sanitizedUrl);
+    setSupabaseKey(sanitizedKey);
+    localStorage.setItem('hardware_supabase_url', sanitizedUrl);
+    localStorage.setItem('hardware_supabase_key', sanitizedKey);
+    supabaseService.updateCredentials(sanitizedUrl, sanitizedKey);
+    await refreshFromSupabase();
+    showToast('Supabase settings saved and reconnected');
+  };
+
+  const handleResetDefaultSupabase = async () => {
+    try {
+      localStorage.removeItem('hardware_supabase_url');
+      localStorage.removeItem('hardware_supabase_key');
+    } catch {}
+    setSupabaseUrl(SUPABASE_URL);
+    setSupabaseKey(SUPABASE_KEY);
+    supabaseService.updateCredentials(SUPABASE_URL, SUPABASE_KEY);
+    await refreshFromSupabase();
+    showToast('Restored default Supabase connection');
   };
 
   return (
@@ -497,10 +515,14 @@ export const SettingsScreen: React.FC = () => {
                       ? 'bg-emerald-100 text-emerald-800'
                       : supabaseStatus === 'connecting'
                       ? 'bg-amber-100 text-amber-800'
-                      : 'bg-slate-100 text-slate-600'
+                      : 'bg-rose-100 text-rose-800'
                   }`}
                 >
-                  {supabaseStatus === 'connected' ? `● Connected (${items.length} SKUs)` : 'Connecting…'}
+                  {supabaseStatus === 'connected'
+                    ? `● Connected (${items.length} SKUs)`
+                    : supabaseStatus === 'connecting'
+                    ? 'Connecting…'
+                    : 'Offline (Click Sync)'}
                 </span>
               </div>
               <p className="text-xs text-slate-500">
@@ -551,10 +573,17 @@ export const SettingsScreen: React.FC = () => {
             />
           </div>
 
-          <div className="flex justify-end pt-1">
+          <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={handleResetDefaultSupabase}
+              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl transition-colors text-xs text-center"
+            >
+              Reset to Default Connection
+            </button>
             <button
               type="submit"
-              className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-colors"
+              className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-colors text-center"
             >
               Save Credentials & Reconnect
             </button>

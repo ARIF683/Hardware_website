@@ -24,7 +24,7 @@ interface BillScreenProps {
 }
 
 export const BillScreen: React.FC<BillScreenProps> = ({ onBack, onOpenCalculator }) => {
-  const { items, confirmPurchaseBill } = useStock();
+  const { items, confirmPurchaseBill, showToast } = useStock();
 
   const [stage, setStage] = useState<'idle' | 'review'>('idle');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
@@ -109,7 +109,7 @@ export const BillScreen: React.FC<BillScreenProps> = ({ onBack, onOpenCalculator
 
   const handleConfirm = () => {
     if (includedRows.length === 0) {
-      alert('Please fill at least one valid item name with quantity & rate');
+      showToast('Please fill at least one valid item name with quantity & rate');
       return;
     }
     confirmPurchaseBill(supplier, billNo, billDate, rows);
