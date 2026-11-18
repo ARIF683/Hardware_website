@@ -28,6 +28,17 @@ export const PrintModal: React.FC<PrintModalProps> = ({
 
   const isQuotation = type === 'quotation';
   const docTitle = isQuotation ? 'ESTIMATE / QUOTATION' : 'TAX INVOICE';
+  const safeItems = Array.isArray(data.items) ? data.items : [];
+  const safeNum = (v: unknown, fallback = 0) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const safeSubtotal = safeNum(data.subtotal, 0);
+  const safeDiscount = safeNum(data.discount, 0);
+  const safeTaxPercent = safeNum(data.taxPercent, 0);
+  const safeTaxAmount = safeNum(data.taxAmount, 0);
+  const safeGrandTotal = safeNum(data.grandTotal ?? (data as any).finalAmount, 0);
+  const hasLineDiscounts = safeItems.some((i) => safeNum(i?.discountPercent, 0) > 0);
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 overflow-y-auto">
@@ -172,37 +183,37 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                       <th className="py-2.5 px-2">Item Description</th>
                       <th className="py-2.5 px-2 text-center">Qty</th>
                       <th className="py-2.5 px-2 text-right">Unit Rate</th>
-                      {data.items.some((i) => i.discountPercent > 0) && (
+                      {hasLineDiscounts && (
                         <th className="py-2.5 px-2 text-right">Disc %</th>
                       )}
                       <th className="py-2.5 px-2 text-right">Amount (₹)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {data.items.map((item, idx) => (
+                    {safeItems.map((item, idx) => (
                       <tr key={idx} className="hover:bg-slate-50/50">
                         <td className="py-2.5 px-2 text-slate-400">{idx + 1}</td>
                         <td className="py-2.5 px-2 font-medium text-slate-900">
-                          {item.name}
-                          {item.code && (
+                          {item?.name || 'Item'}
+                          {item?.code && (
                             <span className="text-[10px] text-slate-400 font-mono ml-1.5">
                               ({item.code})
                             </span>
                           )}
                         </td>
                         <td className="py-2.5 px-2 text-center font-bold">
-                          {item.qty} {item.unit}
+                          {safeNum(item?.qty, 0)} {item?.unit || 'pcs'}
                         </td>
                         <td className="py-2.5 px-2 text-right text-slate-600">
-                          ₹{item.unitPrice.toFixed(2)}
+                          ₹{safeNum(item?.unitPrice, 0).toFixed(2)}
                         </td>
-                        {data.items.some((i) => i.discountPercent > 0) && (
+                        {hasLineDiscounts && (
                           <td className="py-2.5 px-2 text-right text-emerald-600 font-medium">
-                            {item.discountPercent > 0 ? `${item.discountPercent}%` : '—'}
+                            {safeNum(item?.discountPercent, 0) > 0 ? `${safeNum(item?.discountPercent, 0)}%` : '—'}
                           </td>
                         )}
                         <td className="py-2.5 px-2 text-right font-bold text-slate-900">
-                          ₹{item.total.toFixed(2)}
+                          ₹{safeNum(item?.total, 0).toFixed(2)}
                         </td>
                       </tr>
                     ))}
@@ -216,22 +227,22 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                   <div className="flex justify-between">
                     <span>Subtotal:</span>
                     <span className="font-semibold text-slate-900">
-                      {formatRupees(data.subtotal)}
+                      {formatRupees(safeSubtotal)}
                     </span>
                   </div>
 
-                  {data.discount > 0 && (
+                  {safeDiscount > 0 && (
                     <div className="flex justify-between text-emerald-600">
                       <span>Discount:</span>
-                      <span className="font-semibold">- {formatRupees(data.discount)}</span>
+                      <span className="font-semibold">- {formatRupees(safeDiscount)}</span>
                     </div>
                   )}
 
-                  {data.taxPercent > 0 && (
+                  {safeTaxPercent > 0 && (
                     <div className="flex justify-between">
-                      <span>GST ({data.taxPercent}%):</span>
+                      <span>GST ({safeTaxPercent}%):</span>
                       <span className="font-semibold text-slate-900">
-                        {formatRupees(data.taxAmount)}
+                        {formatRupees(safeTaxAmount)}
                       </span>
                     </div>
                   )}
@@ -239,7 +250,7 @@ export const PrintModal: React.FC<PrintModalProps> = ({
                   <div className="flex justify-between items-baseline pt-2 border-t border-slate-300 font-bold text-slate-900">
                     <span className="text-sm">Grand Total:</span>
                     <span className="text-lg font-black text-blue-600">
-                      {formatRupees(data.grandTotal)}
+                      {formatRupees(safeGrandTotal)}
                     </span>
                   </div>
                 </div>
@@ -295,14 +306,14 @@ export const PrintModal: React.FC<PrintModalProps> = ({
 
               {/* Item Lines */}
               <div className="space-y-1 py-1 text-[11px]">
-                {data.items.map((it, idx) => (
+                {safeItems.map((it, idx) => (
                   <div key={idx}>
-                    <div className="font-semibold truncate">{it.name}</div>
+                    <div className="font-semibold truncate">{it?.name || 'Item'}</div>
                     <div className="flex justify-between text-slate-600 text-[10px]">
                       <span>
-                        {it.qty} {it.unit} @ {it.unitPrice}
+                        {safeNum(it?.qty, 0)} {it?.unit || 'pcs'} @ {safeNum(it?.unitPrice, 0)}
                       </span>
-                      <span className="font-bold text-slate-900">₹{it.total.toFixed(2)}</span>
+                      <span className="font-bold text-slate-900">₹{safeNum(it?.total, 0).toFixed(2)}</span>
                     </div>
                   </div>
                 ))}
@@ -314,17 +325,17 @@ export const PrintModal: React.FC<PrintModalProps> = ({
               <div className="space-y-0.5 text-right text-[11px]">
                 <div className="flex justify-between">
                   <span>Subtotal:</span>
-                  <span>₹{data.subtotal.toFixed(2)}</span>
+                  <span>₹{safeSubtotal.toFixed(2)}</span>
                 </div>
-                {data.discount > 0 && (
+                {safeDiscount > 0 && (
                   <div className="flex justify-between text-emerald-600">
                     <span>Discount:</span>
-                    <span>-₹{data.discount.toFixed(2)}</span>
+                    <span>-₹{safeDiscount.toFixed(2)}</span>
                   </div>
                 )}
                 <div className="flex justify-between font-bold text-sm pt-1 border-t border-slate-200">
                   <span>TOTAL:</span>
-                  <span>₹{data.grandTotal.toFixed(2)}</span>
+                  <span>₹{safeGrandTotal.toFixed(2)}</span>
                 </div>
               </div>
 

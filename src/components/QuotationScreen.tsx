@@ -102,52 +102,126 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
 
   const openEditForm = (quote: QuotationRecord) => {
     setEditingQuote(quote);
-    setCustomerName(quote.customerName);
-    setCustomerPhone(quote.customerPhone);
-    setCustomerAddress(quote.customerAddress);
-    setDate(quote.date);
-    setValidUntil(quote.validUntil);
-    setLineItems(quote.items);
-    setOverallDiscount(quote.discount.toString());
-    setTaxPercent(quote.taxPercent.toString());
-    setNotes(quote.notes);
-    setStatus(quote.status);
+    setCustomerName(quote.customerName || '');
+    setCustomerPhone(quote.customerPhone || '');
+    setCustomerAddress(quote.customerAddress || '');
+    setDate(quote.date || new Date().toISOString().split('T')[0]);
+    setValidUntil(quote.validUntil || '');
+    setLineItems(Array.isArray(quote.items) && quote.items.length > 0 ? quote.items : [{
+      itemId: '',
+      name: '',
+      code: '',
+      type: '',
+      unit: 'pcs',
+      qty: 1,
+      unitPrice: 0,
+      discountPercent: 0,
+      total: 0
+    }]);
+    setOverallDiscount(String(quote.discount ?? 0));
+    setTaxPercent(String(quote.taxPercent ?? 0));
+    setNotes(quote.notes || '');
+    setStatus(quote.status || 'Draft');
     setShowFormModal(true);
   };
 
-  // Calculations for form
-  const subtotal = lineItems.reduce((sum, item) => sum + item.total, 0);
-  const discountVal = parseFloat(overallDiscount) || 0;
-  const taxable = Math.max(0, subtotal - discountVal);
-  const taxPct = parseFloat(taxPercent) || 0;
-  const taxAmount = (taxable * taxPct) / 100;
-  const grandTotal = taxable + taxAmount;
+  const safeNum = (val: unknown, fallback = 0): number => {
+    const n = Number(val);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
+  // Calculations for form (guarded against corrupted line items)
+  let subtotal = 0;
+  let discountVal = 0;
+  let taxable = 0;
+  let taxPct = 0;
+  let taxAmount = 0;
+  let grandTotal = 0;
+  try {
+    const safeLines = Array.isArray(lineItems) ? lineItems : [];
+    subtotal = safeLines.reduce((sum, item) => {
+      const lineTotal = safeNum(item?.total, 0);
+      return sum + lineTotal;
+    }, 0);
+    discountVal = Math.max(0, safeNum(parseFloat(overallDiscount), 0));
+    taxable = Math.max(0, subtotal - discountVal);
+    taxPct = Math.max(0, safeNum(parseFloat(taxPercent), 0));
+    taxAmount = Math.round(((taxable * taxPct) / 100) * 100) / 100;
+    grandTotal = Math.round((taxable + taxAmount) * 100) / 100;
+  } catch (calcErr) {
+    console.error('[Billing/Quotation] Failed calculating quotation totals:', calcErr);
+  }
 
   // Update line item
   const updateLine = (index: number, updates: Partial<QuotationLineItem>) => {
-    setLineItems((prev) => {
-      const next = [...prev];
-      const cur = { ...next[index], ...updates };
-      const lineSub = cur.qty * cur.unitPrice;
-      const disc = (lineSub * (cur.discountPercent || 0)) / 100;
-      cur.total = Math.max(0, lineSub - disc);
-      next[index] = cur;
-      return next;
-    });
+    try {
+      setLineItems((prev) => {
+        if (!Array.isArray(prev) || index < 0 || index >= prev.length) {
+          throw new Error(`Invalid quotation line index ${index}`);
+        }
+        const next = [...prev];
+        const cur = { ...next[index], ...updates };
+        const qty = Math.max(0, safeNum(cur.qty, 0));
+        const unitPrice = Math.max(0, safeNum(cur.unitPrice, 0));
+        const discPct = Math.max(0, Math.min(100, safeNum(cur.discountPercent, 0)));
+        const lineSub = qty * unitPrice;
+        const disc = (lineSub * discPct) / 100;
+        const computedTotal = Math.max(0, Math.round((lineSub - disc) * 100) / 100);
+        if (!Number.isFinite(computedTotal)) {
+          throw new Error(`Invalid line total computed at row ${index + 1}`);
+        }
+        cur.qty = qty;
+        cur.unitPrice = unitPrice;
+        cur.discountPercent = discPct;
+        cur.total = computedTotal;
+        next[index] = cur;
+        return next;
+      });
+    } catch (err) {
+      console.error('[Billing/Quotation] Error updating quotation line item:', {
+        index,
+        updates,
+        error: err
+      });
+      showToast('Could not update line item calculation');
+    }
   };
 
   const selectInventoryItemForLine = (index: number, itemId: string) => {
-    const selected = items.find((i) => i.id === itemId);
-    if (!selected) return;
+    try {
+      const cleanId = (itemId || '').trim();
+      if (!cleanId) {
+        updateLine(index, { itemId: '' });
+        return;
+      }
 
-    updateLine(index, {
-      itemId: selected.id,
-      name: selected.name,
-      code: selected.code,
-      type: selected.type,
-      unit: selected.unit,
-      unitPrice: selected.price
-    });
+      const selected = items.find((i) => i.id === cleanId);
+      if (!selected) {
+        console.warn('[Billing/Quotation] Selected inventory item not found:', {
+          index,
+          itemId: cleanId
+        });
+        showToast('Selected inventory item could not be matched');
+        return;
+      }
+
+      const safePrice = Math.max(0, safeNum(selected.price, 0));
+      updateLine(index, {
+        itemId: selected.id,
+        name: selected.name || '',
+        code: selected.code || '',
+        type: selected.type || '',
+        unit: selected.unit || 'pcs',
+        unitPrice: safePrice
+      });
+    } catch (err) {
+      console.error('[Billing/Quotation] Error matching inventory item to quotation line:', {
+        index,
+        itemId,
+        error: err
+      });
+      showToast('Failed to load selected inventory item');
+    }
   };
 
   const addLine = () => {
@@ -175,63 +249,87 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
 
   const handleSaveQuote = (e: React.FormEvent) => {
     e.preventDefault();
-    const validLines = lineItems.filter((i) => i.name.trim().length > 0);
-    if (validLines.length === 0) {
-      showToast('Add at least one item with a valid name');
-      return;
-    }
+    try {
+      const validLines = (Array.isArray(lineItems) ? lineItems : [])
+        .filter((i) => i && typeof i.name === 'string' && i.name.trim().length > 0)
+        .map((i) => {
+          const qty = Math.max(0, safeNum(i.qty, 0));
+          const unitPrice = Math.max(0, safeNum(i.unitPrice, 0));
+          const discountPercent = Math.max(0, Math.min(100, safeNum(i.discountPercent, 0)));
+          const lineSub = qty * unitPrice;
+          const total = Math.max(0, Math.round((lineSub - (lineSub * discountPercent) / 100) * 100) / 100);
+          return {
+            ...i,
+            name: i.name.trim(),
+            qty,
+            unitPrice,
+            discountPercent,
+            total
+          };
+        });
 
-    if (editingQuote) {
-      updateQuotation({
-        ...editingQuote,
-        customerName: customerName.trim() || 'Walk-in Customer',
-        customerPhone: customerPhone.trim(),
-        customerAddress: customerAddress.trim(),
-        date,
-        validUntil,
-        items: validLines,
-        subtotal,
-        discount: discountVal,
-        taxPercent: taxPct,
-        taxAmount,
-        grandTotal,
-        status,
-        notes: notes.trim()
-      });
-    } else {
-      createQuotation({
-        customerName: customerName.trim() || 'Walk-in Customer',
-        customerPhone: customerPhone.trim(),
-        customerAddress: customerAddress.trim(),
-        date,
-        validUntil,
-        items: validLines,
-        subtotal,
-        discount: discountVal,
-        taxPercent: taxPct,
-        taxAmount,
-        grandTotal,
-        status,
-        notes: notes.trim()
-      });
-    }
+      if (validLines.length === 0) {
+        showToast('Add at least one item with a valid name');
+        return;
+      }
 
-    setShowFormModal(false);
+      if (editingQuote) {
+        updateQuotation({
+          ...editingQuote,
+          customerName: customerName.trim() || 'Walk-in Customer',
+          customerPhone: customerPhone.trim(),
+          customerAddress: customerAddress.trim(),
+          date,
+          validUntil,
+          items: validLines,
+          subtotal,
+          discount: discountVal,
+          taxPercent: taxPct,
+          taxAmount,
+          grandTotal,
+          status,
+          notes: notes.trim()
+        });
+      } else {
+        createQuotation({
+          customerName: customerName.trim() || 'Walk-in Customer',
+          customerPhone: customerPhone.trim(),
+          customerAddress: customerAddress.trim(),
+          date,
+          validUntil,
+          items: validLines,
+          subtotal,
+          discount: discountVal,
+          taxPercent: taxPct,
+          taxAmount,
+          grandTotal,
+          status,
+          notes: notes.trim()
+        });
+      }
+
+      setShowFormModal(false);
+    } catch (err) {
+      console.error('[Billing/Quotation] Failed to save quotation:', err);
+      showToast('Failed to save quotation — check console');
+    }
   };
 
   // WhatsApp Share Generator
   const shareWhatsApp = (quote: QuotationRecord) => {
+    const safeItems = Array.isArray(quote.items) ? quote.items : [];
+    const safeGrandTotal = Number(quote.grandTotal ?? (quote as any).finalAmount ?? 0);
     const text = encodeURIComponent(
-      `*ESTIMATE / QUOTATION #${quote.quotationNo}*\n` +
+      `*ESTIMATE / QUOTATION #${quote.quotationNo || ''}*\n` +
       `From: *${shopProfile.name}*\n` +
-      `Customer: ${quote.customerName}\n` +
-      `Date: ${formatDate(quote.date)}\n` +
+      `Customer: ${quote.customerName || 'Walk-in Customer'}\n` +
+      `Date: ${formatDate(quote.date || quote.createdAt)}\n` +
       `-----------------------------\n` +
-      quote.items
-        .map((it, idx) => `${idx + 1}. ${it.name} - ${it.qty} ${it.unit} @ ₹${it.unitPrice} = ₹${it.total.toFixed(2)}`)
+      safeItems
+        .map((it, idx) => `${idx + 1}. ${it.name || ''} - ${it.qty || 0} ${it.unit || 'pcs'} @ ₹${it.unitPrice || 0} = ₹${Number(it.total || 0).toFixed(2)}`)
         .join('\n') +
       `\n-----------------------------\n` +
-      `*Grand Total: ₹${quote.grandTotal.toFixed(2)}*\n` +
+      `*Grand Total: ₹${safeGrandTotal.toFixed(2)}*\n` +
       `\nThank you for your business! Call ${shopProfile.phone} for any queries.`
     );
     const url = quote.customerPhone
@@ -246,11 +344,12 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
 
   // Filtered quotes
   const filteredQuotations = quotations.filter((q) => {
+    const query = searchQuery.toLowerCase();
     const matchesSearch =
-      q.quotationNo.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      q.customerName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      q.customerPhone.includes(searchQuery);
-    const matchesStatus = statusFilter === 'ALL' || q.status === statusFilter;
+      (q.quotationNo || '').toLowerCase().includes(query) ||
+      (q.customerName || '').toLowerCase().includes(query) ||
+      (q.customerPhone || '').includes(searchQuery);
+    const matchesStatus = statusFilter === 'ALL' || (q.status || 'Draft') === statusFilter;
     return matchesSearch && matchesStatus;
   });
 
@@ -316,8 +415,11 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
       ) : (
         <div className="space-y-3">
           {filteredQuotations.map((quote) => {
-            const isConverted = quote.status === 'Converted';
-            const statusColors = {
+            const safeStatus = (quote.status || 'Draft') as QuotationStatus;
+            const isConverted = safeStatus === 'Converted';
+            const safeItems = Array.isArray(quote.items) ? quote.items : [];
+            const safeGrandTotal = Number(quote.grandTotal ?? (quote as any).finalAmount ?? 0);
+            const statusColors: Record<string, string> = {
               Draft: 'bg-slate-100 text-slate-700 border-slate-200',
               Sent: 'bg-blue-50 text-blue-700 border-blue-200',
               Accepted: 'bg-emerald-50 text-emerald-700 border-emerald-200',
@@ -333,18 +435,18 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-xs font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded-md">
-                        {quote.quotationNo}
+                        {quote.quotationNo || 'EST'}
                       </span>
                       <span
                         className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                          statusColors[quote.status]
+                          statusColors[safeStatus] || statusColors.Draft
                         }`}
                       >
-                        {quote.status}
+                        {safeStatus}
                       </span>
                     </div>
                     <h3 className="text-base font-bold text-slate-900 mt-1.5">
-                      {quote.customerName}
+                      {quote.customerName || 'Walk-in Customer'}
                     </h3>
                     <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500 mt-1">
                       {quote.customerPhone && (
@@ -355,7 +457,7 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
                       )}
                       <span className="flex items-center gap-1">
                         <Calendar className="w-3 h-3" />
-                        {formatDate(quote.date)}
+                        {formatDate(quote.date || quote.createdAt)}
                       </span>
                     </div>
                   </div>
@@ -366,27 +468,27 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
                       Grand Total
                     </span>
                     <div className="text-xl sm:text-2xl font-black text-blue-600">
-                      {formatRupees(quote.grandTotal)}
+                      {formatRupees(safeGrandTotal)}
                     </div>
                     <span className="text-[11px] text-slate-400">
-                      {quote.items.length} {quote.items.length === 1 ? 'line item' : 'line items'}
+                      {safeItems.length} {safeItems.length === 1 ? 'line item' : 'line items'}
                     </span>
                   </div>
                 </div>
 
                 {/* Items summary */}
                 <div className="py-3 text-xs text-slate-600 divide-y divide-slate-50">
-                  {quote.items.slice(0, 3).map((item, idx) => (
+                  {safeItems.slice(0, 3).map((item, idx) => (
                     <div key={idx} className="py-1 flex justify-between">
                       <span className="truncate pr-4">
-                        {item.name} × {item.qty} {item.unit}
+                        {item.name || 'Item'} × {item.qty || 0} {item.unit || 'pcs'}
                       </span>
-                      <span className="font-semibold shrink-0">{formatRupees(item.total)}</span>
+                      <span className="font-semibold shrink-0">{formatRupees(item.total || 0)}</span>
                     </div>
                   ))}
-                  {quote.items.length > 3 && (
+                  {safeItems.length > 3 && (
                     <div className="pt-1 text-[11px] text-slate-400">
-                      + {quote.items.length - 3} more items…
+                      + {safeItems.length - 3} more items…
                     </div>
                   )}
                 </div>
@@ -398,12 +500,20 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
                     {!isConverted && (
                       <button
                         onClick={() => {
-                          if (
-                            window.confirm(
-                              `Convert Quote #${quote.quotationNo} to final sale bill? This will deduct ${quote.items.length} items from inventory and log revenue.`
-                            )
-                          ) {
-                            convertQuotationToBill(quote.id);
+                          try {
+                            if (
+                              window.confirm(
+                                `Convert Quote #${quote.quotationNo || ''} to final sale bill? This will deduct ${safeItems.length} item(s) from inventory and log revenue.`
+                              )
+                            ) {
+                              convertQuotationToBill(quote.id);
+                            }
+                          } catch (err) {
+                            console.error('[Billing/Quotation] Convert to Bill action error:', {
+                              quoteId: quote.id,
+                              error: err
+                            });
+                            showToast('Error converting quotation to bill');
                           }
                         }}
                         className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors"

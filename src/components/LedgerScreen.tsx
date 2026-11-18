@@ -77,17 +77,21 @@ export const LedgerScreen: React.FC<LedgerScreenProps> = ({ onOpenPrintStatement
     .reduce((sum, a) => sum + a.netBalance, 0);
 
   const displayedAccounts = (activeTypeTab === 'CUSTOMER' ? customerAccounts : supplierAccounts).filter(
-    (acc) =>
-      acc.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      acc.phone.includes(searchQuery) ||
-      acc.address.toLowerCase().includes(searchQuery.toLowerCase())
+    (acc) => {
+      const q = searchQuery.toLowerCase();
+      return (
+        (acc.name || '').toLowerCase().includes(q) ||
+        (acc.phone || '').includes(searchQuery) ||
+        (acc.address || '').toLowerCase().includes(q)
+      );
+    }
   );
 
   const selectedAccount = ledgerAccounts.find((a) => a.id === selectedAccountId);
   const selectedEntries = selectedAccount
     ? ledgerEntries
         .filter((e) => e.accountId === selectedAccount.id)
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+        .sort((a, b) => new Date(b.date || b.createdAt).getTime() - new Date(a.date || a.createdAt).getTime())
     : [];
 
   const handleCreateAccount = (e: React.FormEvent) => {
@@ -480,7 +484,7 @@ export const LedgerScreen: React.FC<LedgerScreenProps> = ({ onOpenPrintStatement
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <span className="font-semibold text-slate-800">
-                              {entry.description || (isGave ? 'You Gave' : 'You Got')}
+                              {entry.description || (entry as any).note || (isGave ? 'You Gave' : 'You Got')}
                             </span>
                             {entry.billRef && (
                               <span className="px-1.5 py-0.5 text-[10px] font-mono bg-slate-100 rounded text-slate-600">
@@ -489,7 +493,7 @@ export const LedgerScreen: React.FC<LedgerScreenProps> = ({ onOpenPrintStatement
                             )}
                           </div>
                           <span className="text-[11px] text-slate-400 mt-0.5 block">
-                            {formatDate(entry.date)}
+                            {formatDate(entry.date || entry.createdAt)}
                           </span>
                         </div>
 

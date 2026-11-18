@@ -74,13 +74,30 @@ export const BillScreen: React.FC<BillScreenProps> = ({ onBack, onOpenCalculator
     ]);
   };
 
+  const safeNum = (val: unknown, fallback = 0): number => {
+    const n = Number(val);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
   const updateRow = (id: string, updates: Partial<BillRowData>) => {
-    setRows((prev) =>
-      prev.map((r) => {
-        if (r.id !== id) return r;
-        return { ...r, ...updates };
-      })
-    );
+    try {
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.id !== id) return r;
+          const next = { ...r, ...updates };
+          if (updates.qty !== undefined) {
+            next.qty = Math.max(0, safeNum(updates.qty, 0));
+          }
+          if (updates.rate !== undefined) {
+            next.rate = Math.max(0, safeNum(updates.rate, 0));
+          }
+          return next;
+        })
+      );
+    } catch (err) {
+      console.error('[Billing/Purchase] Failed updating bill row:', { id, updates, error: err });
+      showToast('Could not update purchase bill row');
+    }
   };
 
   const removeRow = (id: string) => {
@@ -90,30 +107,72 @@ export const BillScreen: React.FC<BillScreenProps> = ({ onBack, onOpenCalculator
   };
 
   const handleSelectMatchedItem = (rowId: string, itemId: string) => {
-    const matched = items.find((i) => i.id === itemId);
-    if (matched) {
+    try {
+      const cleanId = (itemId || '').trim();
+      if (!cleanId) {
+        updateRow(rowId, { matchedItemId: null });
+        return;
+      }
+
+      const matched = items.find((i) => i.id === cleanId);
+      if (!matched) {
+        console.warn('[Billing/Purchase] Selected catalog item not found for purchase row:', {
+          rowId,
+          itemId: cleanId
+        });
+        showToast('Selected catalog item could not be matched');
+        return;
+      }
+
       updateRow(rowId, {
         matchedItemId: matched.id,
-        name: matched.name,
-        rate: matched.cost || matched.price,
-        unit: matched.unit,
+        name: matched.name || '',
+        rate: Math.max(0, safeNum(matched.cost || matched.price, 0)),
+        unit: matched.unit || 'pcs',
         type: matched.type,
         brand: matched.brand,
         size: matched.size
       });
+    } catch (err) {
+      console.error('[Billing/Purchase] Error selecting matched catalog item:', {
+        rowId,
+        itemId,
+        error: err
+      });
+      showToast('Failed to match catalog item');
     }
   };
 
-  const includedRows = rows.filter((r) => r.include && r.name.trim().length > 0);
-  const billTotal = includedRows.reduce((sum, r) => sum + r.rate * r.qty, 0);
+  let includedRows: BillRowData[] = [];
+  let billTotal = 0;
+  try {
+    includedRows = (Array.isArray(rows) ? rows : []).filter(
+      (r) => r && r.include && typeof r.name === 'string' && r.name.trim().length > 0
+    );
+    billTotal = includedRows.reduce(
+      (sum, r) => sum + safeNum(r.rate, 0) * safeNum(r.qty, 0),
+      0
+    );
+  } catch (calcErr) {
+    console.error('[Billing/Purchase] Failed calculating purchase bill total:', calcErr);
+  }
 
   const handleConfirm = () => {
-    if (includedRows.length === 0) {
-      showToast('Please fill at least one valid item name with quantity & rate');
-      return;
+    try {
+      if (includedRows.length === 0) {
+        showToast('Please fill at least one valid item name with quantity & rate');
+        return;
+      }
+      confirmPurchaseBill(supplier, billNo, billDate, rows);
+      onBack();
+    } catch (err) {
+      console.error('[Billing/Purchase] Error confirming purchase bill:', {
+        supplier,
+        billNo,
+        error: err
+      });
+      showToast('Failed to confirm purchase bill — check console');
     }
-    confirmPurchaseBill(supplier, billNo, billDate, rows);
-    onBack();
   };
 
   return (
@@ -412,7 +471,7 @@ export const BillScreen: React.FC<BillScreenProps> = ({ onBack, onOpenCalculator
                       {row.matchedItemId ? '✓ Linked to existing SKU' : '• Will create new SKU'}
                     </span>
                     <span className="font-bold text-slate-900 text-xs">
-                      Line Total: {formatRupees(row.rate * row.qty)}
+                      Line Total: {formatRupees(safeNum(row.rate, 0) * safeNum(row.qty, 0))}
                     </span>
                   </div>
                 </div>

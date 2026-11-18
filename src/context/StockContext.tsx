@@ -139,17 +139,64 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [transactions, setTransactions] = useState<TransactionRecord[]>(() =>
     loadLocal('transactions', [])
   );
-  const [quotations, setQuotations] = useState<QuotationRecord[]>(() =>
-    loadLocal('quotations', [])
-  );
+  const [quotations, setQuotations] = useState<QuotationRecord[]>(() => {
+    const list = loadLocal<any[]>('quotations', []);
+    if (!Array.isArray(list)) return [];
+    return list.map((q) => ({
+      id: String(q.id || ''),
+      quotationNo: String(q.quotationNo || q.quotation_no || `EST-${String(q.id || '').slice(0, 4).toUpperCase()}`),
+      customerName: String(q.customerName || q.customer_name || 'Walk-in Customer'),
+      customerPhone: String(q.customerPhone || q.customer_phone || ''),
+      customerAddress: String(q.customerAddress || q.customer_address || ''),
+      date: String(q.date || (q.createdAt ? String(q.createdAt).split('T')[0] : '') || ''),
+      validUntil: String(q.validUntil || q.valid_until || ''),
+      items: Array.isArray(q.items) ? q.items : [],
+      subtotal: Number(q.subtotal || 0),
+      discount: Number(q.discount || 0),
+      taxPercent: Number(q.taxPercent ?? q.tax_percent ?? 0),
+      taxAmount: Number(q.taxAmount ?? q.tax_amount ?? 0),
+      grandTotal: Number(q.grandTotal ?? q.grand_total ?? q.finalAmount ?? 0),
+      status: (['Draft', 'Sent', 'Accepted', 'Converted'].includes(q.status) ? q.status : 'Draft') as QuotationRecord['status'],
+      notes: String(q.notes || ''),
+      createdAt: String(q.createdAt || q.created_at || new Date().toISOString())
+    }));
+  });
   const [ledgerAccounts, setLedgerAccounts] = useState<LedgerAccount[]>(() => {
-    const list = loadLocal<LedgerAccount[]>('ledger_accounts', []);
-    // Purge sample mock accounts if present
-    return list.filter((a) => !a.id.startsWith('acc_1') && !a.id.startsWith('acc_2') && !a.id.startsWith('acc_3') && !a.id.startsWith('acc_4'));
+    const list = loadLocal<any[]>('ledger_accounts', []);
+    if (!Array.isArray(list)) return [];
+    const mockIds = new Set(['acc_1', 'acc_2', 'acc_3', 'acc_4']);
+    return list
+      .filter((a) => a && a.id && !mockIds.has(a.id))
+      .map((a) => ({
+        id: String(a.id),
+        name: String(a.name || ''),
+        phone: String(a.phone || ''),
+        address: String(a.address || ''),
+        type: (String(a.type || 'CUSTOMER').toUpperCase() === 'SUPPLIER' ? 'SUPPLIER' : 'CUSTOMER') as LedgerAccount['type'],
+        netBalance: Number(a.netBalance ?? a.net_balance ?? 0),
+        creditLimit: Number(a.creditLimit ?? a.credit_limit ?? 0),
+        notes: String(a.notes || ''),
+        createdAt: String(a.createdAt || a.created_at || new Date().toISOString()),
+        updatedAt: String(a.updatedAt || a.updated_at || new Date().toISOString())
+      }));
   });
   const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>(() => {
-    const list = loadLocal<LedgerEntry[]>('ledger_entries', []);
-    return list.filter((e) => !e.id.startsWith('entry_1') && !e.id.startsWith('entry_2') && !e.id.startsWith('entry_3') && !e.id.startsWith('entry_4'));
+    const list = loadLocal<any[]>('ledger_entries', []);
+    if (!Array.isArray(list)) return [];
+    const mockIds = new Set(['entry_1', 'entry_2', 'entry_3', 'entry_4']);
+    return list
+      .filter((e) => e && e.id && !mockIds.has(e.id))
+      .map((e) => ({
+        id: String(e.id),
+        accountId: String(e.accountId || e.account_id || ''),
+        type: (String(e.type || e.entryType || e.entry_type || 'GAVE').toUpperCase() === 'GOT' ? 'GOT' : 'GAVE') as 'GAVE' | 'GOT',
+        amount: Number(e.amount || 0),
+        balanceAfter: Number(e.balanceAfter ?? e.balance_after ?? 0),
+        date: String(e.date || (e.createdAt ? String(e.createdAt).split('T')[0] : '') || ''),
+        description: String(e.description ?? e.note ?? ''),
+        billRef: String(e.billRef || e.bill_ref || ''),
+        createdAt: String(e.createdAt || e.created_at || new Date().toISOString())
+      }));
   });
   const [dailyCashflows, setDailyCashflows] = useState<DailyCashflowRecord[]>(() => {
     const list = loadLocal<DailyCashflowRecord[]>('daily_cashflows', []);
@@ -722,86 +769,151 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     rows: ParsedTintRow[],
     manualMappings: Record<string, string> = {}
   ): { deductedCount: number; alreadyCount: number; totalLiters: number } => {
-    const newProcessedSet = new Set(processedTintIds);
-    const newLogs: ColorTintLog[] = [];
-    const newTxList: TransactionRecord[] = [];
-    const updatedItemsMap = new Map<string, Item>(items.map((i) => [i.id, { ...i }]));
+    try {
+      const safeRows = Array.isArray(rows) ? rows : [];
+      const newProcessedSet = new Set(processedTintIds);
+      const newLogs: ColorTintLog[] = [];
+      const newTxList: TransactionRecord[] = [];
+      const updatedItemsMap = new Map<string, Item>(items.map((i) => [i.id, { ...i }]));
+      const itemsToSync = new Map<string, number>();
 
-    let deductedCount = 0;
-    let alreadyCount = 0;
-    let totalLiters = 0;
-    const now = new Date().toISOString();
+      let deductedCount = 0;
+      let alreadyCount = 0;
+      let totalLiters = 0;
+      let failedCount = 0;
+      const now = new Date().toISOString();
 
-    for (const row of rows) {
-      if (row.isAlreadyProcessed || newProcessedSet.has(row.tintRecordId)) {
-        alreadyCount++;
-        continue;
+      for (let idx = 0; idx < safeRows.length; idx++) {
+        const row = safeRows[idx];
+        try {
+          if (!row || !row.tintRecordId) {
+            console.warn('[Billing/Tint] Skipped malformed tint row:', { rowIndex: idx, row });
+            failedCount++;
+            continue;
+          }
+
+          if (row.isAlreadyProcessed || newProcessedSet.has(row.tintRecordId)) {
+            alreadyCount++;
+            continue;
+          }
+
+          const targetItemId = manualMappings[row.tintRecordId] || row.matchedItem?.id;
+          const targetItem = targetItemId ? updatedItemsMap.get(targetItemId) : null;
+
+          if (targetItemId && !targetItem) {
+            console.warn('[Billing/Tint] Target catalog item not found for tint deduction:', {
+              rowIndex: idx,
+              tintRecordId: row.tintRecordId,
+              targetItemId,
+              productName: row.productName
+            });
+          }
+
+          const rawDeductQty = Number(row.deductQty);
+          const validDeductQty = Number.isFinite(rawDeductQty) && rawDeductQty > 0 ? rawDeductQty : 0;
+
+          if (targetItem && validDeductQty > 0) {
+            const currentQty = Number.isFinite(Number(targetItem.qty)) ? Number(targetItem.qty) : 0;
+            const newQty = Math.round((currentQty - validDeductQty) * 100) / 100;
+            if (!Number.isFinite(newQty)) {
+              throw new Error(`Computed invalid stock balance (${newQty}) for item ${targetItem.name}`);
+            }
+
+            targetItem.qty = newQty;
+            targetItem.updatedAt = now;
+            updatedItemsMap.set(targetItem.id, targetItem);
+            itemsToSync.set(targetItem.id, newQty);
+
+            const tx: TransactionRecord = {
+              clientId: `tint_tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              itemId: targetItem.id,
+              itemName: targetItem.name,
+              action: 'out',
+              qty: validDeductQty,
+              balance: newQty,
+              note: `Color Tint: Base ${row.baseCode} • ${row.canFactor} pack (${row.totalLiters} Ltr dispensed)`,
+              unit: row.deductUnit,
+              createdAt: row.tintTimestampIso || now
+            };
+            newTxList.push(tx);
+            supabaseService.insertTransaction(tx).catch((err) => {
+              console.error('[Billing/Tint] Failed to sync tint transaction:', { tx, err });
+            });
+          } else if (targetItem && validDeductQty <= 0) {
+            console.warn('[Billing/Tint] Skipped deduction due to invalid deductQty:', {
+              rowIndex: idx,
+              tintRecordId: row.tintRecordId,
+              itemId: targetItem.id,
+              deductQty: row.deductQty
+            });
+          }
+
+          newLogs.push({
+            tintRecordId: row.tintRecordId,
+            productName: row.productName,
+            baseCode: row.baseCode,
+            canFactor: row.canFactor,
+            canFactorLiters: row.canFactorLiters,
+            liters: Number.isFinite(Number(row.totalLiters)) ? Number(row.totalLiters) : 0,
+            noOfCans: Number.isFinite(Number(row.noOfCans)) ? Number(row.noOfCans) : 0,
+            tintDate: row.tintDateRaw,
+            tintTime: row.tintTimeRaw,
+            tintTimestamp: row.tintTimestampIso,
+            matchedItemId: targetItem?.id || null,
+            matchedItemName: targetItem?.name || row.productName,
+            matchedItemSize: targetItem?.size || row.canFactor,
+            matchedItemBrand: targetItem?.brand || '',
+            matchedItemType: targetItem?.type || '',
+            qtyDeducted: targetItem ? validDeductQty : 0,
+            deductUnit: row.deductUnit,
+            deductedAt: now
+          });
+
+          newProcessedSet.add(row.tintRecordId);
+          deductedCount++;
+          totalLiters += Number.isFinite(Number(row.totalLiters)) ? Number(row.totalLiters) : 0;
+        } catch (rowErr) {
+          failedCount++;
+          console.error('[Billing/Tint] Error calculating inventory deduction for tint row:', {
+            rowIndex: idx,
+            row,
+            error: rowErr
+          });
+        }
       }
 
-      // Target item (matched or mapped)
-      const targetItemId = manualMappings[row.tintRecordId] || row.matchedItem?.id;
-      const targetItem = targetItemId ? updatedItemsMap.get(targetItemId) : null;
+      if (deductedCount > 0) {
+        setItems(Array.from(updatedItemsMap.values()));
+        setTransactions((prev) => [...newTxList, ...prev]);
+        setTintLogs((prev) => [...newLogs, ...prev]);
+        setProcessedTintIds(Array.from(newProcessedSet));
 
-      if (targetItem) {
-        const newQty = Math.round((targetItem.qty - row.deductQty) * 100) / 100;
-        targetItem.qty = newQty;
-        targetItem.updatedAt = now;
-        updatedItemsMap.set(targetItem.id, targetItem);
+        itemsToSync.forEach((finalQty, itemId) => {
+          supabaseService.updateItemQty(itemId, finalQty).catch((err) => {
+            console.error('[Billing/Tint] Failed to sync updated item qty to Supabase:', {
+              itemId,
+              finalQty,
+              err
+            });
+          });
+        });
 
-        // Add transaction record with clear Base & Liter information (no shade code)
-        const tx: TransactionRecord = {
-          clientId: `tint_tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          itemId: targetItem.id,
-          itemName: targetItem.name,
-          action: 'out',
-          qty: row.deductQty,
-          balance: newQty,
-          note: `Color Tint: Base ${row.baseCode} • ${row.canFactor} pack (${row.totalLiters} Ltr dispensed)`,
-          unit: row.deductUnit,
-          createdAt: row.tintTimestampIso || now
-        };
-        newTxList.push(tx);
-        supabaseService.insertTransaction(tx).catch(console.error);
-        supabaseService.updateItemQty(targetItem.id, newQty).catch(console.error);
+        const failedSuffix = failedCount > 0 ? ` (${failedCount} failed)` : '';
+        showToast(
+          `Tint Report Applied: ${deductedCount} record(s) deducted (${totalLiters.toFixed(1)} Ltr)${failedSuffix}`
+        );
+      } else if (failedCount > 0) {
+        showToast(`Tint import encountered ${failedCount} invalid record(s) — check console`);
+      } else {
+        showToast(`No new tint records to deduct (${alreadyCount} already applied)`);
       }
 
-      newLogs.push({
-        tintRecordId: row.tintRecordId,
-        productName: row.productName,
-        baseCode: row.baseCode,
-        canFactor: row.canFactor,
-        canFactorLiters: row.canFactorLiters,
-        liters: row.totalLiters,
-        noOfCans: row.noOfCans,
-        tintDate: row.tintDateRaw,
-        tintTime: row.tintTimeRaw,
-        tintTimestamp: row.tintTimestampIso,
-        matchedItemId: targetItem?.id || null,
-        matchedItemName: targetItem?.name || row.productName,
-        matchedItemSize: targetItem?.size || row.canFactor,
-        matchedItemBrand: targetItem?.brand || '',
-        matchedItemType: targetItem?.type || '',
-        qtyDeducted: targetItem ? row.deductQty : 0,
-        deductUnit: row.deductUnit,
-        deductedAt: now
-      });
-
-      newProcessedSet.add(row.tintRecordId);
-      deductedCount++;
-      totalLiters += row.totalLiters;
+      return { deductedCount, alreadyCount, totalLiters };
+    } catch (err) {
+      console.error('[Billing/Tint] processColorMachineImport failed unexpectedly:', err);
+      showToast('Failed to apply color tint deductions');
+      return { deductedCount: 0, alreadyCount: 0, totalLiters: 0 };
     }
-
-    if (deductedCount > 0) {
-      setItems(Array.from(updatedItemsMap.values()));
-      setTransactions((prev) => [...newTxList, ...prev]);
-      setTintLogs((prev) => [...newLogs, ...prev]);
-      setProcessedTintIds(Array.from(newProcessedSet));
-      showToast(`Tint Report Applied: ${deductedCount} record(s) deducted (${totalLiters.toFixed(1)} Ltr)`);
-    } else {
-      showToast(`No new tint records to deduct (${alreadyCount} already applied)`);
-    }
-
-    return { deductedCount, alreadyCount, totalLiters };
   };
 
   const clearTintLogs = () => {
@@ -853,160 +965,287 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     billDate: string,
     rows: BillRowData[]
   ) => {
-    const included = rows.filter((r) => r.include && r.name.trim().length > 0);
-    if (included.length === 0) return;
-
-    const now = new Date().toISOString();
-    let totalBillAmount = 0;
-
-    included.forEach((row) => {
-      const lineCost = row.rate * row.qty;
-      totalBillAmount += lineCost;
-
-      const existing = items.find(
-        (i) => i.id === row.matchedItemId || i.name.toLowerCase() === row.name.toLowerCase()
+    try {
+      const safeRows = Array.isArray(rows) ? rows : [];
+      const included = safeRows.filter(
+        (r) => r && r.include && typeof r.name === 'string' && r.name.trim().length > 0
       );
-
-      if (existing) {
-        const newQty = existing.qty + row.qty;
-        const updatedItem = {
-          ...existing,
-          qty: newQty,
-          cost: row.rate > 0 ? row.rate : existing.cost,
-          updatedAt: now
-        };
-        setItems((prev) =>
-          prev.map((i) => (i.id === existing.id ? updatedItem : i))
-        );
-        supabaseService.upsertItem(updatedItem).catch((err) => console.error(err));
-
-        const tx: TransactionRecord = {
-          clientId: `tx_${Date.now()}_${Math.random()}`,
-          itemId: existing.id,
-          itemName: existing.name,
-          action: 'in',
-          qty: row.qty,
-          balance: newQty,
-          note: `Bill #${billNo || 'Purchase'} - ${supplier || 'Supplier'}`,
-          unit: row.unit || existing.unit,
-          createdAt: now
-        };
-        setTransactions((prev) => [tx, ...prev]);
-        supabaseService.insertTransaction(tx).catch((err) => console.error(err));
-      } else {
-        const newItem: Item = {
-          id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-          o: items.length + 1,
-          name: row.name,
-          code: '',
-          barcode: '',
-          type: row.type || 'General Hardware',
-          brand: row.brand || '',
-          size: row.size || '',
-          aliases: '',
-          mrp: Math.round(row.rate * 1.3),
-          cost: row.rate,
-          price: Math.round(row.rate * 1.25),
-          qty: row.qty,
-          low: 5,
-          unit: row.unit || 'pcs',
-          updatedAt: now
-        };
-        setItems((prev) => [newItem, ...prev]);
-        supabaseService.upsertItem(newItem).catch((err) => console.error(err));
-
-        const tx: TransactionRecord = {
-          clientId: `tx_${Date.now()}_${Math.random()}`,
-          itemId: newItem.id,
-          itemName: newItem.name,
-          action: 'in',
-          qty: row.qty,
-          balance: row.qty,
-          note: `New Item via Bill #${billNo || 'Purchase'} - ${supplier || 'Supplier'}`,
-          unit: newItem.unit,
-          createdAt: now
-        };
-        setTransactions((prev) => [tx, ...prev]);
-        supabaseService.insertTransaction(tx).catch((err) => console.error(err));
+      if (included.length === 0) {
+        console.warn('[Billing/Purchase] confirmPurchaseBill aborted: no valid rows included');
+        showToast('No valid purchase items to process');
+        return;
       }
-    });
 
-    if (supplier.trim().length > 0) {
-      const existingAccount = ledgerAccounts.find(
-        (acc) => acc.type === 'SUPPLIER' && acc.name.toLowerCase() === supplier.toLowerCase()
+      const now = new Date().toISOString();
+      const workingItemsMap = new Map<string, Item>(items.map((i) => [i.id, { ...i }]));
+      const newItemsCreated: Item[] = [];
+      const newTxList: TransactionRecord[] = [];
+      const itemsToSync = new Map<string, Item>();
+      const skippedRows: string[] = [];
+      let totalBillAmount = 0;
+      let processedCount = 0;
+
+      included.forEach((row, idx) => {
+        try {
+          const cleanRowName = row.name.trim();
+          const rowQty = Number(row.qty);
+          const rowRate = Number(row.rate);
+
+          if (!Number.isFinite(rowQty) || rowQty <= 0) {
+            console.warn('[Billing/Purchase] Skipped row with invalid quantity:', {
+              rowIndex: idx,
+              rowName: cleanRowName,
+              rawQty: row.qty
+            });
+            skippedRows.push(cleanRowName);
+            return;
+          }
+
+          const safeRate = Number.isFinite(rowRate) && rowRate >= 0 ? rowRate : 0;
+          const lineCost = Math.round(safeRate * rowQty * 100) / 100;
+          totalBillAmount += lineCost;
+
+          const rawMatchedId = typeof row.matchedItemId === 'string' ? row.matchedItemId.trim() : '';
+          let existing: Item | undefined = rawMatchedId ? workingItemsMap.get(rawMatchedId) : undefined;
+
+          if (!existing) {
+            if (rawMatchedId) {
+              console.warn('[Billing/Purchase] matchedItemId not found in catalog; trying name match:', {
+                rowIndex: idx,
+                matchedItemId: rawMatchedId,
+                rowName: cleanRowName
+              });
+            }
+            const normalizedName = cleanRowName.toLowerCase();
+            existing = Array.from(workingItemsMap.values()).find(
+              (i) => (i.name || '').trim().toLowerCase() === normalizedName
+            );
+          }
+
+          if (existing) {
+            const currentQty = Number.isFinite(Number(existing.qty)) ? Number(existing.qty) : 0;
+            const newQty = Math.round((currentQty + rowQty) * 100) / 100;
+            if (!Number.isFinite(newQty)) {
+              throw new Error(`Invalid stock calculation for "${existing.name}"`);
+            }
+
+            const updatedItem: Item = {
+              ...existing,
+              qty: newQty,
+              cost: safeRate > 0 ? safeRate : existing.cost,
+              updatedAt: now
+            };
+            workingItemsMap.set(existing.id, updatedItem);
+            itemsToSync.set(existing.id, updatedItem);
+
+            const tx: TransactionRecord = {
+              clientId: `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              itemId: existing.id,
+              itemName: existing.name,
+              action: 'in',
+              qty: rowQty,
+              balance: newQty,
+              note: `Bill #${billNo || 'Purchase'} - ${supplier || 'Supplier'}`,
+              unit: row.unit || existing.unit,
+              createdAt: now
+            };
+            newTxList.push(tx);
+          } else {
+            const newItem: Item = {
+              id: `item_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+              o: workingItemsMap.size + 1,
+              name: cleanRowName,
+              code: '',
+              barcode: '',
+              type: row.type || 'General Hardware',
+              brand: row.brand || '',
+              size: row.size || '',
+              aliases: '',
+              mrp: Math.round(safeRate * 1.3),
+              cost: safeRate,
+              price: Math.round(safeRate * 1.25),
+              qty: rowQty,
+              low: 5,
+              unit: row.unit || 'pcs',
+              updatedAt: now
+            };
+            workingItemsMap.set(newItem.id, newItem);
+            newItemsCreated.push(newItem);
+            itemsToSync.set(newItem.id, newItem);
+
+            const tx: TransactionRecord = {
+              clientId: `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              itemId: newItem.id,
+              itemName: newItem.name,
+              action: 'in',
+              qty: rowQty,
+              balance: rowQty,
+              note: `New Item via Bill #${billNo || 'Purchase'} - ${supplier || 'Supplier'}`,
+              unit: newItem.unit,
+              createdAt: now
+            };
+            newTxList.push(tx);
+          }
+          processedCount++;
+        } catch (rowErr) {
+          console.error('[Billing/Purchase] Error processing purchase bill row:', {
+            rowIndex: idx,
+            row,
+            error: rowErr
+          });
+          skippedRows.push(row?.name || `Row #${idx + 1}`);
+        }
+      });
+
+      if (processedCount === 0) {
+        showToast('Could not process any valid purchase items — check console');
+        return;
+      }
+
+      // Commit inventory updates once with cumulative quantities
+      const updatedCatalog = Array.from(workingItemsMap.values()).filter(
+        (i) => !newItemsCreated.some((created) => created.id === i.id)
       );
-
-      if (existingAccount) {
-        const newBalance = existingAccount.netBalance + totalBillAmount;
-        const updatedAcc = { ...existingAccount, netBalance: newBalance, updatedAt: now };
-        setLedgerAccounts((prev) =>
-          prev.map((acc) =>
-            acc.id === existingAccount.id ? updatedAcc : acc
-          )
-        );
-        supabaseService.upsertLedgerAccount(updatedAcc).catch(err => console.error(err));
-
-        const newEntry: LedgerEntry = {
-          id: `entry_${Date.now()}`,
-          accountId: existingAccount.id,
-          type: 'GOT',
-          amount: totalBillAmount,
-          balanceAfter: newBalance,
-          date: billDate || now.split('T')[0],
-          description: `Purchase Bill #${billNo || 'Bill'} (${included.length} items)`,
-          billRef: billNo,
-          createdAt: now
-        };
-        setLedgerEntries((prev) => [newEntry, ...prev]);
-        supabaseService.upsertLedgerEntry(newEntry).catch(err => console.error(err));
-      } else {
-        const newAcc: LedgerAccount = {
-          id: `acc_${Date.now()}`,
-          name: supplier,
-          phone: '',
-          address: '',
-          type: 'SUPPLIER',
-          netBalance: totalBillAmount,
-          creditLimit: 100000,
-          notes: 'Auto-created from purchase bill',
-          createdAt: now,
-          updatedAt: now
-        };
-        setLedgerAccounts((prev) => [newAcc, ...prev]);
-        supabaseService.upsertLedgerAccount(newAcc).catch(err => console.error(err));
-
-        const newEntry: LedgerEntry = {
-          id: `entry_${Date.now()}`,
-          accountId: newAcc.id,
-          type: 'GOT',
-          amount: totalBillAmount,
-          balanceAfter: totalBillAmount,
-          date: billDate || now.split('T')[0],
-          description: `Purchase Bill #${billNo || 'Bill'} (${included.length} items)`,
-          billRef: billNo,
-          createdAt: now
-        };
-        setLedgerEntries((prev) => [newEntry, ...prev]);
-        supabaseService.upsertLedgerEntry(newEntry).catch(err => console.error(err));
+      setItems([...newItemsCreated, ...updatedCatalog]);
+      if (newTxList.length > 0) {
+        setTransactions((prev) => [...newTxList, ...prev]);
       }
+
+      // Sync items and transactions safely
+      itemsToSync.forEach((itemToSync) => {
+        supabaseService.upsertItem(itemToSync).catch((err) => {
+          console.error('[Billing/Purchase] Remote upsertItem failed:', {
+            itemId: itemToSync.id,
+            itemName: itemToSync.name,
+            err
+          });
+        });
+      });
+      newTxList.forEach((tx) => {
+        supabaseService.insertTransaction(tx).catch((err) => {
+          console.error('[Billing/Purchase] Remote insertTransaction failed:', { tx, err });
+        });
+      });
+
+      // Update supplier ledger safely
+      try {
+        const cleanSupplier = (supplier || '').trim();
+        if (cleanSupplier.length > 0 && Number.isFinite(totalBillAmount)) {
+          const existingAccount = ledgerAccounts.find(
+            (acc) =>
+              acc.type === 'SUPPLIER' &&
+              (acc.name || '').trim().toLowerCase() === cleanSupplier.toLowerCase()
+          );
+
+          if (existingAccount) {
+            const currentBal = Number.isFinite(Number(existingAccount.netBalance))
+              ? Number(existingAccount.netBalance)
+              : 0;
+            const newBalance = Math.round((currentBal + totalBillAmount) * 100) / 100;
+            const updatedAcc = { ...existingAccount, netBalance: newBalance, updatedAt: now };
+            setLedgerAccounts((prev) =>
+              prev.map((acc) => (acc.id === existingAccount.id ? updatedAcc : acc))
+            );
+            supabaseService.upsertLedgerAccount(updatedAcc).catch((err) => {
+              console.error('[Billing/Purchase] upsertLedgerAccount failed:', err);
+            });
+
+            const newEntry: LedgerEntry = {
+              id: `entry_${Date.now()}`,
+              accountId: existingAccount.id,
+              type: 'GOT',
+              amount: totalBillAmount,
+              balanceAfter: newBalance,
+              date: billDate || now.split('T')[0],
+              description: `Purchase Bill #${billNo || 'Bill'} (${processedCount} items)`,
+              billRef: billNo,
+              createdAt: now
+            };
+            setLedgerEntries((prev) => [newEntry, ...prev]);
+            supabaseService.upsertLedgerEntry(newEntry).catch((err) => {
+              console.error('[Billing/Purchase] upsertLedgerEntry failed:', err);
+            });
+          } else {
+            const newAcc: LedgerAccount = {
+              id: `acc_${Date.now()}`,
+              name: cleanSupplier,
+              phone: '',
+              address: '',
+              type: 'SUPPLIER',
+              netBalance: totalBillAmount,
+              creditLimit: 100000,
+              notes: 'Auto-created from purchase bill',
+              createdAt: now,
+              updatedAt: now
+            };
+            setLedgerAccounts((prev) => [newAcc, ...prev]);
+            supabaseService.upsertLedgerAccount(newAcc).catch((err) => {
+              console.error('[Billing/Purchase] upsertLedgerAccount (new) failed:', err);
+            });
+
+            const newEntry: LedgerEntry = {
+              id: `entry_${Date.now()}`,
+              accountId: newAcc.id,
+              type: 'GOT',
+              amount: totalBillAmount,
+              balanceAfter: totalBillAmount,
+              date: billDate || now.split('T')[0],
+              description: `Purchase Bill #${billNo || 'Bill'} (${processedCount} items)`,
+              billRef: billNo,
+              createdAt: now
+            };
+            setLedgerEntries((prev) => [newEntry, ...prev]);
+            supabaseService.upsertLedgerEntry(newEntry).catch((err) => {
+              console.error('[Billing/Purchase] upsertLedgerEntry (new) failed:', err);
+            });
+          }
+        }
+      } catch (ledgerErr) {
+        console.error('[Billing/Purchase] Failed updating supplier Khata ledger:', {
+          supplier,
+          billNo,
+          error: ledgerErr
+        });
+      }
+
+      // Sync bill to Supabase purchases table safely
+      try {
+        supabaseService
+          .insertPurchaseRecord({
+            supplier: supplier || '',
+            billNo: billNo || '',
+            billDate: billDate || now.split('T')[0],
+            total: totalBillAmount,
+            lines: included.map((r) => ({
+              name: r.name,
+              qty: Number.isFinite(Number(r.qty)) ? Number(r.qty) : 0,
+              rate: Number.isFinite(Number(r.rate)) ? Number(r.rate) : 0,
+              bill_name: r.name
+            })),
+            createdAt: now
+          })
+          .catch((err) => {
+            console.error('[Billing/Purchase] insertPurchaseRecord failed:', err);
+          });
+      } catch (syncErr) {
+        console.error('[Billing/Purchase] Purchase record sync preparation failed:', syncErr);
+      }
+
+      if (skippedRows.length > 0) {
+        showToast(
+          `Bill confirmed: ${processedCount} items synced, ${skippedRows.length} skipped — check console`
+        );
+      } else {
+        showToast(`Bill confirmed! ${processedCount} items synced to Supabase.`);
+      }
+    } catch (err) {
+      console.error('[Billing/Purchase] confirmPurchaseBill failed unexpectedly:', {
+        supplier,
+        billNo,
+        error: err
+      });
+      showToast('Purchase bill update failed — check console for details');
     }
-
-    // Sync bill to Supabase purchases table
-    supabaseService.insertPurchaseRecord({
-      supplier,
-      billNo,
-      billDate,
-      total: totalBillAmount,
-      lines: included.map(r => ({
-        name: r.name,
-        qty: r.qty,
-        rate: r.rate,
-        bill_name: r.name
-      })),
-      createdAt: now
-    }).catch(err => console.error(err));
-
-    showToast(`Bill confirmed! ${included.length} items synced to Supabase.`);
   };
 
   // Quotation Management
@@ -1040,53 +1279,212 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const convertQuotationToBill = (quoteId: string) => {
-    const quote = quotations.find((q) => q.id === quoteId);
-    if (!quote) return;
+    try {
+      const quote = quotations.find((q) => q.id === quoteId);
+      if (!quote) {
+        console.warn('[Billing] convertQuotationToBill aborted: quotation not found', { quoteId });
+        showToast('Quotation not found');
+        return;
+      }
 
-    const now = new Date().toISOString();
+      if (quote.status === 'Converted') {
+        console.warn('[Billing] convertQuotationToBill skipped: quotation already converted', {
+          quoteId,
+          quotationNo: quote.quotationNo
+        });
+        showToast(`Quote #${quote.quotationNo} is already converted`);
+        return;
+      }
 
-    quote.items.forEach((line) => {
-      const match = items.find((i) => i.id === line.itemId || i.name === line.name);
-      if (match) {
-        const newBal = match.qty - line.qty;
-        setItems((prev) =>
-          prev.map((i) => (i.id === match.id ? { ...i, qty: newBal, updatedAt: now } : i))
-        );
-        supabaseService.updateItemQty(match.id, newBal).catch((err) => console.error(err));
+      const now = new Date().toISOString();
+      const quoteLines = Array.isArray(quote.items) ? quote.items : [];
+      const workingItemsMap = new Map<string, Item>(items.map((i) => [i.id, { ...i }]));
+      const updatedItemIds = new Set<string>();
+      const newTxList: TransactionRecord[] = [];
+      const unmatchedLines: string[] = [];
+      const invalidLines: string[] = [];
+      let deductedCount = 0;
 
-        const tx: TransactionRecord = {
-          clientId: `tx_${Date.now()}_${Math.random()}`,
-          itemId: match.id,
-          itemName: match.name,
-          action: 'out',
-          qty: line.qty,
-          balance: newBal,
-          note: `Converted Bill from Quote #${quote.quotationNo} (${quote.customerName})`,
-          unit: line.unit,
+      // Deduct inventory line-by-line with granular isolation so one bad item match never crashes billing
+      quoteLines.forEach((line, idx) => {
+        try {
+          if (!line || typeof line !== 'object') {
+            throw new Error(`Malformed quotation line item at index ${idx}`);
+          }
+
+          const rawItemId = typeof line.itemId === 'string' ? line.itemId.trim() : '';
+          const rawLineName = typeof line.name === 'string' ? line.name.trim() : '';
+          const normalizedLineName = rawLineName.toLowerCase();
+
+          let match: Item | undefined = rawItemId ? workingItemsMap.get(rawItemId) : undefined;
+          if (!match && normalizedLineName) {
+            match = Array.from(workingItemsMap.values()).find(
+              (i) => (i.name || '').trim().toLowerCase() === normalizedLineName
+            );
+            if (match && rawItemId) {
+              console.warn(
+                '[Billing] Quotation line itemId not found in catalog; matched by name fallback:',
+                {
+                  quoteId,
+                  quotationNo: quote.quotationNo,
+                  lineIndex: idx,
+                  staleItemId: rawItemId,
+                  matchedItemId: match.id,
+                  matchedName: match.name
+                }
+              );
+            }
+          }
+
+          if (!match) {
+            console.warn(
+              '[Billing] Skipped inventory deduction — no valid catalog item match found:',
+              {
+                quoteId,
+                quotationNo: quote.quotationNo,
+                lineIndex: idx,
+                itemId: line.itemId ?? null,
+                itemName: line.name ?? ''
+              }
+            );
+            unmatchedLines.push(rawLineName || `Line #${idx + 1}`);
+            return;
+          }
+
+          const deductQty = Number(line.qty);
+          if (!Number.isFinite(deductQty) || deductQty <= 0) {
+            console.warn(
+              '[Billing] Skipped inventory deduction — invalid line quantity:',
+              {
+                quoteId,
+                quotationNo: quote.quotationNo,
+                lineIndex: idx,
+                itemId: match.id,
+                itemName: match.name,
+                rawQty: line.qty
+              }
+            );
+            invalidLines.push(rawLineName || match.name);
+            return;
+          }
+
+          const currentQty = Number.isFinite(Number(match.qty)) ? Number(match.qty) : 0;
+          const newBal = Math.round((currentQty - deductQty) * 100) / 100;
+          if (!Number.isFinite(newBal)) {
+            throw new Error(`Computed invalid stock balance (${newBal}) for "${match.name}"`);
+          }
+
+          workingItemsMap.set(match.id, { ...match, qty: newBal, updatedAt: now });
+          updatedItemIds.add(match.id);
+
+          const tx: TransactionRecord = {
+            clientId: `tx_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 7)}`,
+            itemId: match.id,
+            itemName: match.name,
+            action: 'out',
+            qty: deductQty,
+            balance: newBal,
+            note: `Converted Bill from Quote #${quote.quotationNo || ''} (${quote.customerName || 'Customer'})`,
+            unit: line.unit || match.unit || 'pcs',
+            createdAt: now
+          };
+          newTxList.push(tx);
+          deductedCount++;
+        } catch (lineErr) {
+          console.error('[Billing] Inventory deduction error for quotation line:', {
+            quoteId,
+            quotationNo: quote.quotationNo,
+            lineIndex: idx,
+            line,
+            error: lineErr
+          });
+          invalidLines.push(line?.name || `Line #${idx + 1}`);
+        }
+      });
+
+      // Commit cumulative stock & transaction updates
+      if (updatedItemIds.size > 0) {
+        setItems(Array.from(workingItemsMap.values()));
+        updatedItemIds.forEach((itemId) => {
+          const updated = workingItemsMap.get(itemId);
+          if (updated) {
+            supabaseService.updateItemQty(itemId, updated.qty).catch((err) => {
+              console.error('[Billing] Failed syncing deducted item qty to Supabase:', {
+                quoteId,
+                itemId,
+                qty: updated.qty,
+                err
+              });
+            });
+          }
+        });
+      }
+
+      if (newTxList.length > 0) {
+        setTransactions((prev) => [...newTxList, ...prev]);
+        newTxList.forEach((tx) => {
+          supabaseService.insertTransaction(tx).catch((err) => {
+            console.error('[Billing] Failed syncing quotation sale transaction:', { tx, err });
+          });
+        });
+      }
+
+      // Record cashflow safely
+      try {
+        const rawGrandTotal = Number(quote.grandTotal ?? (quote as any).finalAmount ?? 0);
+        const safeGrandTotal = Number.isFinite(rawGrandTotal) ? rawGrandTotal : 0;
+        const cf: DailyCashflowRecord = {
+          id: `cf_${Date.now()}`,
+          date: new Date().toISOString().split('T')[0],
+          type: 'SALE',
+          category: 'Hardware & Quotation Sale',
+          amount: safeGrandTotal,
+          paymentMode: 'Cash',
+          note: `Quotation #${quote.quotationNo || ''} - ${quote.customerName || 'Walk-in Customer'}`,
           createdAt: now
         };
-        setTransactions((prev) => [tx, ...prev]);
-        supabaseService.insertTransaction(tx).catch((err) => console.error(err));
+        setDailyCashflows((prev) => [cf, ...prev]);
+        supabaseService.insertCashflowRecord(cf).catch((err) => {
+          console.error('[Billing] Failed syncing quotation cashflow to Supabase:', { cf, err });
+        });
+      } catch (cfErr) {
+        console.error('[Billing] Failed creating cashflow record for converted quotation:', {
+          quoteId,
+          error: cfErr
+        });
       }
-    });
 
-    const cf: DailyCashflowRecord = {
-      id: `cf_${Date.now()}`,
-      date: new Date().toISOString().split('T')[0],
-      type: 'SALE',
-      category: 'Hardware & Quotation Sale',
-      amount: quote.grandTotal,
-      paymentMode: 'Cash',
-      note: `Quotation #${quote.quotationNo} - ${quote.customerName}`,
-      createdAt: now
-    };
-    setDailyCashflows((prev) => [cf, ...prev]);
+      // Mark quotation as Converted and sync
+      try {
+        const convertedQuote: QuotationRecord = { ...quote, status: 'Converted' };
+        setQuotations((prev) =>
+          prev.map((q) => (q.id === quoteId ? convertedQuote : q))
+        );
+        supabaseService.upsertQuotation(convertedQuote).catch((err) => {
+          console.error('[Billing] Failed syncing converted quotation status to Supabase:', {
+            quoteId,
+            err
+          });
+        });
+      } catch (statusErr) {
+        console.error('[Billing] Failed updating quotation status to Converted:', {
+          quoteId,
+          error: statusErr
+        });
+      }
 
-    setQuotations((prev) =>
-      prev.map((q) => (q.id === quoteId ? { ...q, status: 'Converted' } : q))
-    );
-
-    showToast(`Quote #${quote.quotationNo} converted to Bill & inventory updated!`);
+      const skippedTotal = unmatchedLines.length + invalidLines.length;
+      if (skippedTotal > 0) {
+        showToast(
+          `Quote #${quote.quotationNo} converted (${deductedCount} deducted, ${skippedTotal} skipped — check console)`
+        );
+      } else {
+        showToast(`Quote #${quote.quotationNo} converted to Bill & inventory updated!`);
+      }
+    } catch (err) {
+      console.error('[Billing] convertQuotationToBill failed unexpectedly:', { quoteId, error: err });
+      showToast('Failed to convert quotation to bill — check console');
+    }
   };
 
   // Ledger Management

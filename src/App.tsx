@@ -16,6 +16,47 @@ import { UnitConversionModal } from './components/UnitConversionModal';
 import { AuthGateScreen } from './components/AuthGateScreen';
 import { NavigationTab, Item, QuotationRecord } from './types';
 
+class TabErrorBoundary extends React.Component<
+  { resetKey: string; onReset: () => void; children: React.ReactNode },
+  { hasError: boolean; errorMsg: string }
+> {
+  constructor(props: { resetKey: string; onReset: () => void; children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, errorMsg: '' };
+  }
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, errorMsg: error?.message || 'Unexpected rendering error' };
+  }
+
+  componentDidUpdate(prevProps: { resetKey: string }) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false, errorMsg: '' });
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="bg-white rounded-2xl p-8 border border-red-200 shadow-xs text-center max-w-md mx-auto my-8 space-y-3">
+          <h3 className="text-base font-bold text-slate-900">Something went wrong loading this view</h3>
+          <p className="text-xs text-slate-500 break-words">{this.state.errorMsg}</p>
+          <button
+            onClick={() => {
+              this.setState({ hasError: false, errorMsg: '' });
+              this.props.onReset();
+            }}
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-colors"
+          >
+            Reload View
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 const MainAppContent: React.FC = () => {
   const { isPinLocked, isAuthed, toastMessage, shopProfile, themeColor } = useStock();
 
@@ -122,44 +163,49 @@ const MainAppContent: React.FC = () => {
 
       {/* Main View Port */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6 overflow-x-hidden">
-        {showBillFlow ? (
-          <BillScreen
-            onBack={() => setShowBillFlow(false)}
-            onOpenCalculator={() => setShowCalculator(true)}
-          />
-        ) : (
-          <>
-            {currentTab === 'HOME' && (
-              <HomeScreen
-                onNavigateTab={(tab) => setCurrentTab(tab)}
-                onOpenItemDetail={(id) => setSelectedDetailItemId(id)}
-                onOpenQuickBill={() => setShowBillFlow(true)}
-                onOpenNewItem={handleOpenNewItem}
-                onFilterLowStock={handleFilterLowStockFromHome}
-              />
-            )}
+        <TabErrorBoundary
+          resetKey={`${currentTab}_${showBillFlow}`}
+          onReset={() => setShowBillFlow(false)}
+        >
+          {showBillFlow ? (
+            <BillScreen
+              onBack={() => setShowBillFlow(false)}
+              onOpenCalculator={() => setShowCalculator(true)}
+            />
+          ) : (
+            <>
+              {currentTab === 'HOME' && (
+                <HomeScreen
+                  onNavigateTab={(tab) => setCurrentTab(tab)}
+                  onOpenItemDetail={(id) => setSelectedDetailItemId(id)}
+                  onOpenQuickBill={() => setShowBillFlow(true)}
+                  onOpenNewItem={handleOpenNewItem}
+                  onFilterLowStock={handleFilterLowStockFromHome}
+                />
+              )}
 
-            {currentTab === 'ITEMS' && (
-              <ItemsScreen
-                onOpenItemDetail={(id) => setSelectedDetailItemId(id)}
-                onOpenNewItem={handleOpenNewItem}
-                onOpenTransaction={handleOpenTransaction}
-                initialLowStockFilter={lowStockFilterActive}
-              />
-            )}
+              {currentTab === 'ITEMS' && (
+                <ItemsScreen
+                  onOpenItemDetail={(id) => setSelectedDetailItemId(id)}
+                  onOpenNewItem={handleOpenNewItem}
+                  onOpenTransaction={handleOpenTransaction}
+                  initialLowStockFilter={lowStockFilterActive}
+                />
+              )}
 
-            {currentTab === 'BILLING' && (
-              <BillingHubScreen
-                onOpenQuickBill={() => setShowBillFlow(true)}
-                onOpenPrint={handleOpenPrint}
-              />
-            )}
+              {currentTab === 'BILLING' && (
+                <BillingHubScreen
+                  onOpenQuickBill={() => setShowBillFlow(true)}
+                  onOpenPrint={handleOpenPrint}
+                />
+              )}
 
-            {currentTab === 'TRANSACTIONS' && <TransactionsScreen />}
+              {currentTab === 'TRANSACTIONS' && <TransactionsScreen />}
 
-            {currentTab === 'SETTINGS' && <SettingsScreen />}
-          </>
-        )}
+              {currentTab === 'SETTINGS' && <SettingsScreen />}
+            </>
+          )}
+        </TabErrorBoundary>
       </main>
 
       {/* Toast Notification Popup */}

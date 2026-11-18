@@ -810,6 +810,14 @@ class SupabaseService {
     }
   }
 
+  private normalizeQuotationStatus(raw?: string | null): 'Draft' | 'Sent' | 'Accepted' | 'Converted' {
+    const s = String(raw || '').trim().toLowerCase();
+    if (s === 'sent') return 'Sent';
+    if (s === 'accepted') return 'Accepted';
+    if (s === 'converted') return 'Converted';
+    return 'Draft';
+  }
+
   // --- Quotations REST API ---
   public async fetchQuotations(): Promise<QuotationRecord[]> {
     try {
@@ -819,17 +827,45 @@ class SupabaseService {
       });
       if (!resp.ok) return [];
       const rows = await resp.json();
-      return rows.map((r: any) => ({
-        id: r.id || r.client_id,
-        customerName: r.customer_name,
-        customerPhone: r.customer_phone || '',
-        items: typeof r.items === 'string' ? JSON.parse(r.items) : (r.items || []),
-        subtotal: Number(r.subtotal || 0),
-        discount: Number(r.discount || 0),
-        finalAmount: Number(r.final_amount || 0),
-        status: r.status || 'DRAFT',
-        createdAt: r.created_at || new Date().toISOString()
-      }));
+      if (!Array.isArray(rows)) return [];
+      return rows.map((r: any) => {
+        let parsedItems: any[] = [];
+        try {
+          parsedItems = typeof r.items === 'string' ? JSON.parse(r.items) : (Array.isArray(r.items) ? r.items : []);
+        } catch {
+          parsedItems = [];
+        }
+        const normalizedItems = parsedItems.map((it: any) => ({
+          itemId: it.itemId || it.item_id || null,
+          name: String(it.name || ''),
+          code: String(it.code || ''),
+          type: String(it.type || ''),
+          unit: String(it.unit || 'pcs'),
+          qty: Number(it.qty || 0),
+          unitPrice: Number(it.unitPrice ?? it.unit_price ?? 0),
+          discountPercent: Number(it.discountPercent ?? it.discount_percent ?? 0),
+          total: Number(it.total || 0)
+        }));
+        const createdIso = String(r.created_at || new Date().toISOString());
+        return {
+          id: String(r.id || r.client_id || ''),
+          quotationNo: String(r.quotation_no || r.quotationNo || `EST-${String(r.id || '').slice(0, 4).toUpperCase()}`),
+          customerName: String(r.customer_name || r.customerName || 'Walk-in Customer'),
+          customerPhone: String(r.customer_phone || r.customerPhone || ''),
+          customerAddress: String(r.customer_address || r.customerAddress || ''),
+          date: String(r.date || createdIso.split('T')[0] || ''),
+          validUntil: String(r.valid_until || r.validUntil || ''),
+          items: normalizedItems,
+          subtotal: Number(r.subtotal || 0),
+          discount: Number(r.discount || 0),
+          taxPercent: Number(r.tax_percent ?? r.taxPercent ?? 0),
+          taxAmount: Number(r.tax_amount ?? r.taxAmount ?? 0),
+          grandTotal: Number(r.grand_total ?? r.final_amount ?? r.grandTotal ?? 0),
+          status: this.normalizeQuotationStatus(r.status),
+          notes: String(r.notes || ''),
+          createdAt: createdIso
+        };
+      });
     } catch (e) {
       console.warn('Notice: Quotations sync skipped:', e);
       return [];
@@ -839,17 +875,24 @@ class SupabaseService {
   public async upsertQuotation(quote: QuotationRecord): Promise<void> {
     const payload = {
       id: quote.id,
-      customer_name: quote.customerName,
-      customer_phone: quote.customerPhone,
-      items: JSON.stringify(quote.items),
-      subtotal: quote.subtotal,
-      discount: quote.discount,
-      final_amount: (quote as any).finalAmount || quote.grandTotal,
-      status: quote.status,
-      created_at: quote.createdAt
+      quotation_no: quote.quotationNo || '',
+      customer_name: quote.customerName || 'Walk-in Customer',
+      customer_phone: quote.customerPhone || null,
+      customer_address: quote.customerAddress || null,
+      date: quote.date || new Date().toISOString().split('T')[0],
+      valid_until: quote.validUntil || null,
+      items: quote.items || [],
+      subtotal: Number(quote.subtotal || 0),
+      discount: Number(quote.discount || 0),
+      tax_percent: Number(quote.taxPercent || 0),
+      tax_amount: Number(quote.taxAmount || 0),
+      grand_total: Number(quote.grandTotal ?? (quote as any).finalAmount ?? 0),
+      status: quote.status || 'Draft',
+      notes: quote.notes || '',
+      created_at: quote.createdAt || new Date().toISOString()
     };
     try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/quotations`, {
+      await fetch(`${this.getCleanUrl()}/rest/v1/quotations?on_conflict=id`, {
         method: 'POST',
         headers: {
           ...this.getHeaders(true),
@@ -872,13 +915,18 @@ class SupabaseService {
       });
       if (!resp.ok) return [];
       const rows = await resp.json();
+      if (!Array.isArray(rows)) return [];
       return rows.map((r: any) => ({
-        id: r.id || r.client_id,
-        name: r.name,
-        phone: r.phone || '',
-        type: r.type || 'CUSTOMER',
-        netBalance: Number(r.net_balance || 0),
-        updatedAt: r.updated_at || new Date().toISOString()
+        id: String(r.id || r.client_id || ''),
+        name: String(r.name || ''),
+        phone: String(r.phone || ''),
+        address: String(r.address || ''),
+        type: (String(r.type || 'CUSTOMER').toUpperCase() === 'SUPPLIER' ? 'SUPPLIER' : 'CUSTOMER') as 'CUSTOMER' | 'SUPPLIER',
+        netBalance: Number(r.net_balance ?? r.netBalance ?? 0),
+        creditLimit: Number(r.credit_limit ?? r.creditLimit ?? 0),
+        notes: String(r.notes || ''),
+        createdAt: String(r.created_at || new Date().toISOString()),
+        updatedAt: String(r.updated_at || r.created_at || new Date().toISOString())
       }));
     } catch (e) {
       console.warn('Notice: Ledger accounts fetch skipped:', e);
@@ -890,13 +938,17 @@ class SupabaseService {
     const payload = {
       id: account.id,
       name: account.name,
-      phone: account.phone,
+      phone: account.phone || '',
+      address: account.address || '',
       type: account.type,
-      net_balance: account.netBalance,
-      updated_at: account.updatedAt
+      net_balance: Number(account.netBalance || 0),
+      credit_limit: Number(account.creditLimit || 0),
+      notes: account.notes || '',
+      created_at: account.createdAt || new Date().toISOString(),
+      updated_at: account.updatedAt || new Date().toISOString()
     };
     try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/ledger_accounts`, {
+      await fetch(`${this.getCleanUrl()}/rest/v1/ledger_accounts?on_conflict=id`, {
         method: 'POST',
         headers: {
           ...this.getHeaders(true),
@@ -914,7 +966,7 @@ class SupabaseService {
   public async fetchLedgerEntries(accountId?: string): Promise<LedgerEntry[]> {
     try {
       const endpoint = accountId
-        ? `${this.getCleanUrl()}/rest/v1/ledger_entries?select=*&account_id=eq.${accountId}&order=created_at.desc`
+        ? `${this.getCleanUrl()}/rest/v1/ledger_entries?select=*&account_id=eq.${encodeURIComponent(accountId)}&order=created_at.desc`
         : `${this.getCleanUrl()}/rest/v1/ledger_entries?select=*&order=created_at.desc`;
       const resp = await fetch(endpoint, {
         method: 'GET',
@@ -922,14 +974,22 @@ class SupabaseService {
       });
       if (!resp.ok) return [];
       const rows = await resp.json();
-      return rows.map((r: any) => ({
-        id: r.id || r.client_id,
-        accountId: r.account_id,
-        entryType: r.entry_type,
-        amount: Number(r.amount),
-        note: r.note || '',
-        createdAt: r.created_at || new Date().toISOString()
-      }));
+      if (!Array.isArray(rows)) return [];
+      return rows.map((r: any) => {
+        const createdIso = String(r.created_at || new Date().toISOString());
+        const rawType = String(r.type || r.entry_type || 'GAVE').toUpperCase();
+        return {
+          id: String(r.id || r.client_id || ''),
+          accountId: String(r.account_id || r.accountId || ''),
+          type: (rawType === 'GOT' ? 'GOT' : 'GAVE') as 'GAVE' | 'GOT',
+          amount: Number(r.amount || 0),
+          balanceAfter: Number(r.balance_after ?? r.balanceAfter ?? 0),
+          date: String(r.date || createdIso.split('T')[0] || ''),
+          description: String(r.description ?? r.note ?? ''),
+          billRef: String(r.bill_ref || r.billRef || ''),
+          createdAt: createdIso
+        };
+      });
     } catch (e) {
       console.warn('Notice: Ledger entries fetch skipped:', e);
       return [];
@@ -940,15 +1000,21 @@ class SupabaseService {
     const payload = {
       id: entry.id,
       account_id: entry.accountId,
-      entry_type: (entry as any).entryType || entry.type,
-      amount: entry.amount,
-      note: (entry as any).note || entry.description,
-      created_at: entry.createdAt
+      type: (entry as any).entryType || entry.type || 'GAVE',
+      amount: Number(entry.amount || 0),
+      balance_after: Number(entry.balanceAfter ?? 0),
+      date: entry.date || new Date().toISOString().split('T')[0],
+      description: entry.description ?? (entry as any).note ?? '',
+      bill_ref: entry.billRef || '',
+      created_at: entry.createdAt || new Date().toISOString()
     };
     try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/ledger_entries`, {
+      await fetch(`${this.getCleanUrl()}/rest/v1/ledger_entries?on_conflict=id`, {
         method: 'POST',
-        headers: this.getHeaders(true),
+        headers: {
+          ...this.getHeaders(true),
+          'Prefer': 'resolution=merge-duplicates'
+        },
         body: JSON.stringify(payload)
       });
       this.broadcastChange('ledger_entries', 'INSERT', payload);
@@ -969,13 +1035,22 @@ class SupabaseService {
   }
 
   public async insertPurchaseRecord(purchase: any) {
+    const payload = {
+      client_id: purchase.client_id || purchase.clientId || generateUUID(),
+      supplier: purchase.supplier || '',
+      bill_no: purchase.bill_no || purchase.billNo || '',
+      bill_date: purchase.bill_date || purchase.billDate || new Date().toISOString().slice(0, 10),
+      total: Number(purchase.total || 0),
+      lines: purchase.lines || [],
+      created_at: purchase.created_at || purchase.createdAt || new Date().toISOString()
+    };
     try {
       await fetch(`${this.getCleanUrl()}/rest/v1/purchases`, {
         method: "POST",
         headers: this.getHeaders(true),
-        body: JSON.stringify(purchase)
+        body: JSON.stringify(payload)
       });
-      this.broadcastChange('purchases', 'INSERT', purchase);
+      this.broadcastChange('purchases', 'INSERT', payload);
     } catch (e) {
       console.warn("insertPurchaseRecord warning:", e);
     }
