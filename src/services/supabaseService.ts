@@ -1,4 +1,4 @@
-import { Item, TransactionRecord, DailyCashflowRecord, QuotationRecord, LedgerAccount, LedgerEntry } from '../types';
+import { Item, TransactionRecord, DailyCashflowRecord, QuotationRecord, LedgerAccount, LedgerEntry, RemoteStoreProfile } from '../types';
 
 export const SUPABASE_URL = "https://xkjvcufajsyqbzjjllma.supabase.co";
 export const SUPABASE_KEY = "sb_publishable_sXokssWnrTPWROtmfHjoWA_LRqVPt8V";
@@ -84,6 +84,126 @@ function compressImageFile(file: File, maxWidth = 600, maxHeight = 600, quality 
   });
 }
 
+export const PROFILE_CLIENT_ID = "00000000-0000-0000-0000-000000000001";
+export const PROFILE_SUPPLIER = "__STORE_PROFILE__";
+
+function optPresentString(obj: any, key: string): string | null | undefined {
+  if (!obj || typeof obj !== 'object') return undefined;
+  if (!(key in obj) || obj[key] === null || obj[key] === undefined) return undefined;
+  const val = String(obj[key]);
+  return val === 'null' ? undefined : val;
+}
+
+export const StoreProfileSyncCodec = {
+  parseFromObject(first: any): RemoteStoreProfile | null {
+    if (!first || typeof first !== 'object') return null;
+    const logo = optPresentString(first, 'logoUrl') ?? optPresentString(first, 'avatarUrl');
+    return {
+      bannerUrl: optPresentString(first, 'bannerUrl'),
+      logoUrl: logo,
+      storeName: optPresentString(first, 'storeName'),
+      location: optPresentString(first, 'location'),
+      roleTitle: optPresentString(first, 'roleTitle'),
+      supervisorName: optPresentString(first, 'supervisorName'),
+      bankName: optPresentString(first, 'bankName'),
+      accountHolder: optPresentString(first, 'accountHolder'),
+      accountNumber: optPresentString(first, 'accountNumber'),
+      ifscCode: optPresentString(first, 'ifscCode'),
+      branchName: optPresentString(first, 'branchName'),
+      upiId: optPresentString(first, 'upiId'),
+      signatureUrl: optPresentString(first, 'signatureUrl'),
+      qrCodeUrl: optPresentString(first, 'qrCodeUrl'),
+      festivalConfigJson: optPresentString(first, 'festivalConfigJson'),
+      userRolesJson: optPresentString(first, 'userRolesJson'),
+      updatedAt: Number(first.updatedAt || 0),
+    };
+  },
+
+  parseFromLines(linesAny: any): RemoteStoreProfile | null {
+    let first: any = null;
+    if (Array.isArray(linesAny)) {
+      first = linesAny[0] || null;
+    } else if (linesAny && typeof linesAny === 'object') {
+      first = linesAny;
+    } else if (typeof linesAny === 'string') {
+      const trimmed = linesAny.trim();
+      if (trimmed) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          first = Array.isArray(parsed) ? (parsed[0] || null) : parsed;
+        } catch (e) {
+          console.warn('StoreProfileSync: Failed parsing store profile JSON string', e);
+        }
+      }
+    }
+    return this.parseFromObject(first);
+  },
+
+  toJsonObject(profile: RemoteStoreProfile): Record<string, any> {
+    const out: Record<string, any> = {};
+    if (profile.bannerUrl !== undefined && profile.bannerUrl !== null) out.bannerUrl = profile.bannerUrl;
+    if (profile.logoUrl !== undefined && profile.logoUrl !== null) {
+      out.logoUrl = profile.logoUrl;
+      out.avatarUrl = profile.logoUrl;
+    }
+    if (profile.storeName !== undefined && profile.storeName !== null) out.storeName = profile.storeName;
+    if (profile.location !== undefined && profile.location !== null) out.location = profile.location;
+    if (profile.roleTitle !== undefined && profile.roleTitle !== null) out.roleTitle = profile.roleTitle;
+    if (profile.supervisorName !== undefined && profile.supervisorName !== null) out.supervisorName = profile.supervisorName;
+    if (profile.bankName !== undefined && profile.bankName !== null) out.bankName = profile.bankName;
+    if (profile.accountHolder !== undefined && profile.accountHolder !== null) out.accountHolder = profile.accountHolder;
+    if (profile.accountNumber !== undefined && profile.accountNumber !== null) out.accountNumber = profile.accountNumber;
+    if (profile.ifscCode !== undefined && profile.ifscCode !== null) out.ifscCode = profile.ifscCode;
+    if (profile.branchName !== undefined && profile.branchName !== null) out.branchName = profile.branchName;
+    if (profile.upiId !== undefined && profile.upiId !== null) out.upiId = profile.upiId;
+    if (profile.signatureUrl !== undefined && profile.signatureUrl !== null) out.signatureUrl = profile.signatureUrl;
+    if (profile.qrCodeUrl !== undefined && profile.qrCodeUrl !== null) out.qrCodeUrl = profile.qrCodeUrl;
+    if (profile.festivalConfigJson !== undefined && profile.festivalConfigJson !== null) {
+      out.festivalConfigJson = profile.festivalConfigJson;
+    }
+    if (profile.userRolesJson !== undefined && profile.userRolesJson !== null) {
+      out.userRolesJson = profile.userRolesJson;
+    }
+    out.updatedAt = profile.updatedAt > 0 ? profile.updatedAt : Date.now();
+    return out;
+  },
+
+  toPurchasesPayload(profile: RemoteStoreProfile, billDate = new Date().toISOString().slice(0, 10)) {
+    return {
+      client_id: PROFILE_CLIENT_ID,
+      supplier: PROFILE_SUPPLIER,
+      bill_no: "CONFIG",
+      bill_date: billDate,
+      total: 0,
+      lines: [this.toJsonObject(profile)],
+    };
+  },
+
+  merge(base: RemoteStoreProfile | null | undefined, override: RemoteStoreProfile): RemoteStoreProfile {
+    if (!base) return override;
+    return {
+      bannerUrl: override.bannerUrl !== undefined ? override.bannerUrl : base.bannerUrl,
+      logoUrl: override.logoUrl !== undefined ? override.logoUrl : base.logoUrl,
+      storeName: override.storeName !== undefined ? override.storeName : base.storeName,
+      location: override.location !== undefined ? override.location : base.location,
+      roleTitle: override.roleTitle !== undefined ? override.roleTitle : base.roleTitle,
+      supervisorName: override.supervisorName !== undefined ? override.supervisorName : base.supervisorName,
+      bankName: override.bankName !== undefined ? override.bankName : base.bankName,
+      accountHolder: override.accountHolder !== undefined ? override.accountHolder : base.accountHolder,
+      accountNumber: override.accountNumber !== undefined ? override.accountNumber : base.accountNumber,
+      ifscCode: override.ifscCode !== undefined ? override.ifscCode : base.ifscCode,
+      branchName: override.branchName !== undefined ? override.branchName : base.branchName,
+      upiId: override.upiId !== undefined ? override.upiId : base.upiId,
+      signatureUrl: override.signatureUrl !== undefined ? override.signatureUrl : base.signatureUrl,
+      qrCodeUrl: override.qrCodeUrl !== undefined ? override.qrCodeUrl : base.qrCodeUrl,
+      festivalConfigJson:
+        override.festivalConfigJson !== undefined ? override.festivalConfigJson : base.festivalConfigJson,
+      userRolesJson: override.userRolesJson !== undefined ? override.userRolesJson : base.userRolesJson,
+      updatedAt: Math.max(Number(base.updatedAt || 0), Number(override.updatedAt || 0)) || Date.now(),
+    };
+  },
+};
+
 class SupabaseService {
   private url: string;
   private key: string;
@@ -92,6 +212,7 @@ class SupabaseService {
   private reconnectTimeout: any = null;
   private currentListener: any = null;
   private isExplicitlyClosed = false;
+  private accessTokenProvider: (() => string) | null = null;
 
   constructor() {
     const envUrl = typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL;
@@ -108,6 +229,10 @@ class SupabaseService {
       try { localStorage.setItem('hardware_supabase_url', this.url); } catch {}
     }
     this.key = (storedKey && storedKey.trim().length > 10) ? storedKey.trim() : defaultKey;
+  }
+
+  public setAccessTokenProvider(provider: (() => string) | null) {
+    this.accessTokenProvider = provider;
   }
 
   public updateCredentials(url: string, key: string) {
@@ -139,11 +264,17 @@ class SupabaseService {
     return cleanSupabaseUrl(this.url);
   }
 
+  private getActiveBearer(): string {
+    const token = this.accessTokenProvider ? (this.accessTokenProvider() || '').trim() : '';
+    return token || this.getCleanKey();
+  }
+
   public getHeaders(isMutation = false): HeadersInit {
     const cleanKey = this.getCleanKey();
+    const bearer = this.getActiveBearer();
     const headers: Record<string, string> = {
       'apikey': cleanKey,
-      'Authorization': `Bearer ${cleanKey}`
+      'Authorization': `Bearer ${bearer}`
     };
     if (isMutation) {
       headers['Content-Type'] = 'application/json';
@@ -259,16 +390,13 @@ class SupabaseService {
           const effectiveRecord = record || (oldRecord ? { id: oldRecord.id } : null);
           const effectiveId = effectiveRecord?.id || oldRecord?.id;
 
-          if (topic.includes("purchases") || table === "purchases" || effectiveRecord?.supplier === "__STORE_PROFILE__" || effectiveRecord?.client_id === "00000000-0000-0000-0000-000000000001") {
+          if (topic.includes("purchases") || table === "purchases" || effectiveRecord?.supplier === PROFILE_SUPPLIER || effectiveRecord?.client_id === PROFILE_CLIENT_ID) {
             const clientId = effectiveRecord?.client_id;
             const supplier = effectiveRecord?.supplier;
-            if (clientId === "00000000-0000-0000-0000-000000000001" || supplier === "__STORE_PROFILE__") {
-              const lines = effectiveRecord?.lines;
-              const first = Array.isArray(lines) ? lines[0] : (typeof lines === "string" ? JSON.parse(lines)[0] : null);
-              const banner = first?.bannerUrl || null;
-              const logo = first?.logoUrl || first?.avatarUrl || null;
-              if (listener && typeof listener.onStoreProfileChanged === "function") {
-                listener.onStoreProfileChanged(banner, logo);
+            if (clientId === PROFILE_CLIENT_ID || supplier === PROFILE_SUPPLIER) {
+              const parsedProfile = StoreProfileSyncCodec.parseFromLines(effectiveRecord?.lines);
+              if (parsedProfile && listener && typeof listener.onStoreProfileChanged === "function") {
+                listener.onStoreProfileChanged(parsedProfile);
               }
             }
           }
@@ -337,11 +465,11 @@ class SupabaseService {
     }
   }
 
-  // --- Store Profile Sync (Banner & Avatar) ---
-  public async fetchStoreProfile(): Promise<{ bannerUrl: string | null; logoUrl: string | null } | null> {
+  // --- Store Profile Sync (Banner, Avatar, Festival Studio & User Roles) ---
+  public async fetchStoreProfile(): Promise<RemoteStoreProfile | null> {
     try {
       const resp = await fetch(
-        `${this.getCleanUrl()}/rest/v1/purchases?client_id=eq.00000000-0000-0000-0000-000000000001&limit=1`,
+        `${this.getCleanUrl()}/rest/v1/purchases?client_id=eq.${PROFILE_CLIENT_ID}&limit=1`,
         {
           method: "GET",
           headers: this.getHeaders(false)
@@ -350,15 +478,7 @@ class SupabaseService {
       if (!resp.ok) return null;
       const list = await resp.json();
       if (Array.isArray(list) && list.length > 0) {
-        const row = list[0];
-        const lines = row.lines;
-        const first = Array.isArray(lines) ? lines[0] : (typeof lines === "string" ? JSON.parse(lines)[0] : null);
-        if (first) {
-          return {
-            bannerUrl: (first.bannerUrl && typeof first.bannerUrl === "string" && first.bannerUrl.trim() !== "") ? first.bannerUrl.trim() : null,
-            logoUrl: (first.logoUrl && typeof first.logoUrl === "string" && first.logoUrl.trim() !== "") ? first.logoUrl.trim() : ((first.avatarUrl && typeof first.avatarUrl === "string" && first.avatarUrl.trim() !== "") ? first.avatarUrl.trim() : null)
-          };
-        }
+        return StoreProfileSyncCodec.parseFromLines(list[0]?.lines);
       }
       return null;
     } catch (e) {
@@ -367,27 +487,31 @@ class SupabaseService {
     }
   }
 
-  public async saveStoreProfile(bannerUrl: string | null, logoUrl: string | null): Promise<void> {
+  public async saveStoreProfile(
+    patchOrBannerUrl: Partial<RemoteStoreProfile> | string | null,
+    legacyLogoUrl?: string | null
+  ): Promise<boolean> {
     try {
-      const payload = {
-        client_id: "00000000-0000-0000-0000-000000000001",
-        supplier: "__STORE_PROFILE__",
-        bill_no: "CONFIG",
-        bill_date: new Date().toISOString().slice(0, 10),
-        total: 0,
-        lines: [
-          {
-            bannerUrl: bannerUrl || "",
-            logoUrl: logoUrl || "",
-            avatarUrl: logoUrl || ""
-          }
-        ]
-      };
+      const patch: RemoteStoreProfile =
+        typeof patchOrBannerUrl === 'object' && patchOrBannerUrl !== null
+          ? {
+              ...patchOrBannerUrl,
+              updatedAt: patchOrBannerUrl.updatedAt || Date.now(),
+            }
+          : {
+              bannerUrl: patchOrBannerUrl ?? '',
+              logoUrl: legacyLogoUrl ?? '',
+              updatedAt: Date.now(),
+            };
+
+      const existing = await this.fetchStoreProfile();
+      const merged = StoreProfileSyncCodec.merge(existing, patch);
+      const payload = StoreProfileSyncCodec.toPurchasesPayload(merged);
+
       const resp = await fetch(`${this.getCleanUrl()}/rest/v1/purchases?on_conflict=client_id`, {
         method: "POST",
         headers: {
-          ...this.getHeaders(),
-          "Content-Type": "application/json",
+          ...this.getHeaders(true),
           Prefer: "resolution=merge-duplicates,return=representation"
         },
         body: JSON.stringify(payload)
@@ -395,12 +519,15 @@ class SupabaseService {
       if (!resp.ok) {
         const err = await resp.text();
         console.error("Failed to save store profile to Supabase:", err);
+        return false;
       } else {
         console.log("Successfully saved store profile to Supabase");
         this.broadcastChange('purchases', 'UPDATE', payload);
+        return true;
       }
     } catch (e) {
       console.error("saveStoreProfile error:", e);
+      return false;
     }
   }
 

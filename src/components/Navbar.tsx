@@ -9,13 +9,12 @@ import {
   Calculator,
   ArrowLeftRight,
   ShieldCheck,
-  ShieldAlert,
-  Search,
   Cloud,
   RefreshCw
 } from 'lucide-react';
 import { useStock } from '../context/StockContext';
 import { NavigationTab } from '../types';
+import { FestivalHeaderPill } from './FestivalComponents';
 
 interface NavbarProps {
   currentTab: NavigationTab;
@@ -38,54 +37,17 @@ export const Navbar: React.FC<NavbarProps> = ({
   const {
     shopProfile,
     isAdmin,
-    unlockAdmin,
-    exitAdmin,
-    showToast,
+    activeFestivals,
     supabaseStatus,
-    isRealtimeLive,
     items,
     refreshFromSupabase
   } = useStock();
-  const [tapCount, setTapCount] = useState(0);
-  const [lastTapTime, setLastTapTime] = useState(0);
-  const [showPinPrompt, setShowPinPrompt] = useState(false);
-  const [enteredPin, setEnteredPin] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleManualSync = async () => {
     setIsRefreshing(true);
     await refreshFromSupabase();
     setIsRefreshing(false);
-  };
-
-  // 3-tap secret trigger on the gear icon (matching Android app behaviour)
-  const handleGearTap = () => {
-    const now = Date.now();
-    if (now - lastTapTime < 700) {
-      const newCount = tapCount + 1;
-      if (newCount >= 3) {
-        if (isAdmin) {
-          exitAdmin();
-        } else {
-          setShowPinPrompt(true);
-        }
-        setTapCount(0);
-      } else {
-        setTapCount(newCount);
-      }
-    } else {
-      setTapCount(1);
-    }
-    setLastTapTime(now);
-    onSelectTab('SETTINGS');
-  };
-
-  const handlePinSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (unlockAdmin(enteredPin)) {
-      setShowPinPrompt(false);
-      setEnteredPin('');
-    }
   };
 
   const navItems: { tab: NavigationTab; label: string; icon: React.FC<any> }[] = [
@@ -121,11 +83,13 @@ export const Navbar: React.FC<NavbarProps> = ({
                   {shopProfile.name}
                 </h1>
                 {isAdmin ? (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-bold tracking-wide uppercase bg-blue-600 text-white rounded-md shadow-xs shrink-0">
+                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-bold tracking-wide uppercase bg-blue-600 text-white rounded-md shadow-xs shrink-0 whitespace-nowrap">
                     <ShieldCheck className="w-3 h-3" />
                     ADMIN
                   </span>
                 ) : null}
+
+                <FestivalHeaderPill festivals={activeFestivals} className="hidden lg:inline-flex" />
 
                 {/* Supabase Live Status Chip */}
                 <button
@@ -134,7 +98,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                     handleManualSync();
                   }}
                   title="Click to sync with Supabase"
-                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-md border transition-all ${
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-bold rounded-md border transition-all whitespace-nowrap ${
                     supabaseStatus === 'connected'
                       ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                       : supabaseStatus === 'connecting'
@@ -145,9 +109,9 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <span
                     className={`w-1.5 h-1.5 rounded-full ${
                       supabaseStatus === 'connected'
-                        ? 'bg-emerald-500 animate-pulse'
+                        ? 'bg-emerald-500'
                         : supabaseStatus === 'connecting'
-                        ? 'bg-amber-500 animate-ping'
+                        ? 'bg-amber-500'
                         : 'bg-rose-500'
                     }`}
                   />
@@ -176,8 +140,8 @@ export const Navbar: React.FC<NavbarProps> = ({
               return (
                 <button
                   key={item.tab}
-                  onClick={() => (item.tab === 'SETTINGS' ? handleGearTap() : onSelectTab(item.tab))}
-                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  onClick={() => onSelectTab(item.tab)}
+                  className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap ${
                     isActive
                       ? 'bg-white text-blue-600 shadow-xs'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
@@ -230,70 +194,29 @@ export const Navbar: React.FC<NavbarProps> = ({
           const Icon = item.icon;
           const isActive = currentTab === item.tab;
           return (
-            <button
-              key={item.tab}
-              onClick={() => (item.tab === 'SETTINGS' ? handleGearTap() : onSelectTab(item.tab))}
-              className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all relative ${
-                isActive ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800 font-medium'
-              }`}
-            >
-              <div
-                className={`p-1 rounded-xl transition-all ${
-                  isActive ? 'bg-blue-50 text-blue-600 scale-105' : ''
-                }`}
-              >
-                <Icon className="w-5 h-5" />
-              </div>
-              <span className="text-[10px] mt-0.5 tracking-tight">{item.label.split(' ')[0]}</span>
-
-              {item.tab === 'SETTINGS' && isAdmin && (
-                <span className="absolute top-1 right-2 w-2 h-2 bg-blue-600 rounded-full ring-2 ring-white"></span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
-      {/* Admin PIN Dialog Modal */}
-      {showPinPrompt && (
-        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-xl border border-slate-200 animate-in fade-in zoom-in-95">
-            <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center mb-4">
-              <ShieldAlert className="w-6 h-6" />
-            </div>
-            <h3 className="text-lg font-bold text-slate-900">Admin Authentication</h3>
-            <p className="text-xs text-slate-500 mt-1">
-              Enter your Admin PIN (Default: <strong className="font-mono text-slate-700">1234</strong>) to unlock restricted actions.
-            </p>
-            <form onSubmit={handlePinSubmit} className="mt-4">
-              <input
-                type="password"
-                maxLength={8}
-                value={enteredPin}
-                onChange={(e) => setEnteredPin(e.target.value)}
-                placeholder="Enter PIN"
-                className="w-full px-4 py-2.5 text-center text-xl font-mono tracking-widest border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                autoFocus
-              />
-              <div className="flex gap-2 mt-4">
-                <button
-                  type="button"
-                  onClick={() => setShowPinPrompt(false)}
-                  className="flex-1 px-4 py-2 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl"
+              <button
+                  key={item.tab}
+                  onClick={() => onSelectTab(item.tab)}
+                  className={`flex flex-col items-center justify-center py-1 px-2.5 rounded-xl transition-all relative ${
+                    isActive ? 'text-blue-600 font-bold' : 'text-slate-500 hover:text-slate-800 font-medium'
+                  }`}
                 >
-                  Cancel
+                  <div
+                    className={`p-1 rounded-xl transition-all ${
+                      isActive ? 'bg-blue-50 text-blue-600 scale-105' : ''
+                    }`}
+                  >
+                    <Icon className="w-5 h-5" />
+                  </div>
+                  <span className="text-[10px] mt-0.5 tracking-tight">{item.label.split(' ')[0]}</span>
+
+                  {item.tab === 'SETTINGS' && isAdmin && (
+                    <span className="absolute top-1 right-2 w-2 h-2 bg-blue-600 rounded-full ring-2 ring-white"></span>
+                  )}
                 </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs"
-                >
-                  Unlock
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </>
-  );
-};
+              );
+            })}
+          </nav>
+        </>
+      );
+    };

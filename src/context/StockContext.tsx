@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import {
   Item,
   TransactionRecord,
@@ -10,7 +10,12 @@ import {
   DynamicUiConfig,
   BillRowData,
   ColorTintLog,
-  ParsedTintRow
+  ParsedTintRow,
+  UserAccount,
+  AnnouncementConfig,
+  FestivalConfig,
+  FestivalStudioConfig,
+  RemoteStoreProfile
 } from '../types';
 import {
   initialLedgerAccounts,
@@ -20,6 +25,13 @@ import {
   initialUiConfig
 } from '../data/mockData';
 import { supabaseService } from '../services/supabaseService';
+import { authService, AuthStateSnapshot, AuthActionResult } from '../services/authService';
+import {
+  AutoFestivalCalendar,
+  festivalPreferenceStore,
+  getEffectiveCustomFestivals,
+  isAnnouncementActiveAt
+} from '../utils/festivalStudio';
 
 interface StockContextType {
   // Data
@@ -42,16 +54,47 @@ interface StockContextType {
   isRealtimeLive: boolean;
   refreshFromSupabase: (isSilent?: boolean) => Promise<void>;
 
-  // Auth & Admin
+  // Auth & Role Management (Synced with Supabase Auth & app_users)
   isAuthed: boolean;
   isAdmin: boolean;
-  isPinLocked: boolean;
-  adminPin: string;
-  unlockAdmin: (pin: string) => boolean;
-  exitAdmin: () => void;
-  setAppAuthed: (authed: boolean) => void;
-  setPinLockEnabled: (enabled: boolean) => void;
-  changeAdminPin: (oldPin: string, newPin: string) => boolean;
+  currentUserEmail: string | null;
+  pendingVerificationEmail: string | null;
+  registeredUsers: UserAccount[];
+  lockRemainingSeconds: number;
+  otpRemainingSeconds: number;
+  resendCooldownSeconds: number;
+  deepLinkMessage: string | null;
+  deepLinkError: string | null;
+  signInEmailPassword: (email: string, password: string) => Promise<AuthActionResult>;
+  signUpEmailPassword: (email: string, password: string) => Promise<AuthActionResult>;
+  verifySignupOtp: (email: string, otp: string) => Promise<AuthActionResult>;
+  resendConfirmationEmail: (email: string) => Promise<AuthActionResult>;
+  requestPasswordResetOtp: (email: string) => Promise<AuthActionResult>;
+  verifyPasswordResetAndUpdate: (email: string, otp: string, newPassword: string) => Promise<AuthActionResult>;
+  requestChangeEmailOtp: (newEmail: string) => Promise<AuthActionResult>;
+  confirmChangeEmailOtp: (newEmail: string, otp: string) => Promise<AuthActionResult>;
+  requestDeleteAccountOtp: () => Promise<AuthActionResult>;
+  confirmDeleteAccountWithOtp: (otp: string) => Promise<AuthActionResult>;
+  clearPendingVerification: () => void;
+  clearAuthStatusMessages: () => void;
+  logout: () => void;
+  refreshCurrentUserRole: (showFeedback?: boolean) => Promise<boolean>;
+  syncUserRolesFromCloud: (showFeedback?: boolean) => Promise<boolean>;
+  upsertUserRole: (email: string, isAdmin: boolean) => Promise<void>;
+  removeUserRole: (email: string) => Promise<void>;
+  setUserAdminRole: (email: string, isAdmin: boolean) => Promise<void>;
+
+  // Announcement & Festival Studio
+  festivalStudioConfig: FestivalStudioConfig;
+  activeFestivals: FestivalConfig[];
+  activeAnnouncement: AnnouncementConfig;
+  isAnnouncementDismissed: boolean;
+  dismissAnnouncement: () => void;
+  effectiveThemeColor: string;
+  saveAndSyncFestivalStudio: (
+    config: FestivalStudioConfig,
+    bannerFilesByIndex?: Record<number, File>
+  ) => Promise<boolean>;
 
   // Item actions
   addItem: (itemData: Omit<Item, 'id' | 'updatedAt'>) => Promise<Item>;
@@ -237,12 +280,17 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [supabaseStatus, setSupabaseStatus] = useState<'connected' | 'connecting' | 'offline'>('connecting');
   const [isRealtimeLive, setIsRealtimeLive] = useState(false);
 
-  // Auth
-  const [isAuthed, setIsAuthed] = useState<boolean>(() => loadLocal('is_authed', true));
-  const [isAdmin, setIsAdmin] = useState<boolean>(false);
-  const [isPinLocked, setIsPinLocked] = useState<boolean>(() => loadLocal('is_pin_locked', false));
-  const [adminPin, setAdminPin] = useState<string>(() => loadLocal('admin_pin', '1234'));
+  // Auth state synchronized with authService
+  const [authSnapshot, setAuthSnapshot] = useState<AuthStateSnapshot>(() => authService.getSnapshot());
   const [themeColor, setThemeColorState] = useState<string>(() => loadLocal('theme_color', '#3b82f6'));
+  const [festivalStudioConfig, setFestivalStudioConfig] = useState<FestivalStudioConfig>(() =>
+    festivalPreferenceStore.load()
+  );
+  const festivalStudioRef = useRef<FestivalStudioConfig>(festivalStudioConfig);
+  festivalStudioRef.current = festivalStudioConfig;
+  const [isAnnouncementDismissed, setIsAnnouncementDismissed] = useState<boolean>(false);
+  const [announcementTick, setAnnouncementTick] = useState<number>(() => Date.now());
+
   const [tintLogs, setTintLogs] = useState<ColorTintLog[]>(() =>
     loadLocal<ColorTintLog[]>('tint_logs', [])
   );
@@ -260,8 +308,84 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const setThemeColor = (color: string) => {
     setThemeColorState(color);
-    localStorage.setItem('hardware_theme_color', JSON.stringify(color));
+    saveLocal('theme_color', color);
   };
+
+  // Wire authService token provider + role persistence listener
+  useEffect(() => {
+    supabaseService.setAccessTokenProvider(() => authService.activeAccessToken());
+    const unsub = authService.subscribe((snap) => {
+      setAuthSnapshot(snap);
+    });
+    authService.onRolesChangedListener = (rolesJson: string, updatedAt: number) => {
+      supabaseService.saveStoreProfile({ userRolesJson: rolesJson, updatedAt }).catch((err) => {
+        console.warn('Role sync to store profile skipped:', err);
+      });
+    };
+    return () => {
+      unsub();
+      authService.onRolesChangedListener = null;
+    };
+  }, []);
+
+  // Derive active festivals, live announcement (with auto start/end wakeup), and effective theme color
+  const activeFestivals = useMemo(
+    () => AutoFestivalCalendar.resolveEffectiveFestivals(festivalStudioConfig),
+    [festivalStudioConfig, announcementTick]
+  );
+
+  useEffect(() => {
+    const raw = festivalStudioConfig.announcement;
+    const now = Date.now();
+    let nextWake: number | null = null;
+    if (raw.enabled && raw.message.trim()) {
+      if (raw.startAtMillis > 0 && now < raw.startAtMillis) {
+        nextWake = raw.startAtMillis;
+      } else if (raw.endAtMillis > 0 && now < raw.endAtMillis) {
+        nextWake = raw.endAtMillis;
+      }
+    }
+    if (!nextWake) return;
+    const waitMs = Math.min(3_600_000, Math.max(1000, nextWake - now + 100));
+    const t = setTimeout(() => setAnnouncementTick(Date.now()), waitMs);
+    return () => clearTimeout(t);
+  }, [festivalStudioConfig, announcementTick]);
+
+  const activeAnnouncement: AnnouncementConfig = useMemo(() => {
+    const raw = festivalStudioConfig.announcement;
+    return isAnnouncementActiveAt(raw, announcementTick)
+      ? raw
+      : { ...raw, enabled: false };
+  }, [festivalStudioConfig.announcement, announcementTick]);
+
+  const lastAnnouncementKeyRef = useRef<string>('');
+  useEffect(() => {
+    const sig = `${activeAnnouncement.enabled}|${activeAnnouncement.message}|${activeAnnouncement.severity}|${activeAnnouncement.startAtMillis}|${activeAnnouncement.endAtMillis}`;
+    if (sig !== lastAnnouncementKeyRef.current) {
+      lastAnnouncementKeyRef.current = sig;
+      setIsAnnouncementDismissed(false);
+    }
+  }, [
+    activeAnnouncement.enabled,
+    activeAnnouncement.message,
+    activeAnnouncement.severity,
+    activeAnnouncement.startAtMillis,
+    activeAnnouncement.endAtMillis
+  ]);
+
+  const dismissAnnouncement = useCallback(() => {
+    setIsAnnouncementDismissed(true);
+  }, []);
+
+  const effectiveThemeColor = useMemo(
+    () =>
+      AutoFestivalCalendar.resolveEffectiveThemeHex(
+        festivalStudioConfig,
+        activeFestivals,
+        themeColor
+      ),
+    [festivalStudioConfig, activeFestivals, themeColor]
+  );
 
   // Toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -271,6 +395,60 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setTimeout(() => {
       setToastMessage((current) => (current === msg ? null : current));
     }, 3200);
+  }, []);
+
+  const applyRemoteStoreProfile = useCallback((remoteStoreProfile: RemoteStoreProfile) => {
+    if (remoteStoreProfile.bannerUrl !== undefined) {
+      const cleanBanner =
+        remoteStoreProfile.bannerUrl && remoteStoreProfile.bannerUrl.trim() !== ''
+          ? remoteStoreProfile.bannerUrl.trim()
+          : null;
+      setBannerUrl(cleanBanner);
+      saveLocal('store_custom_banner', cleanBanner);
+    }
+    if (remoteStoreProfile.logoUrl !== undefined) {
+      const cleanLogo =
+        remoteStoreProfile.logoUrl && remoteStoreProfile.logoUrl.trim() !== ''
+          ? remoteStoreProfile.logoUrl.trim()
+          : null;
+      setLogoUrl(cleanLogo);
+      saveLocal('store_custom_logo', cleanLogo);
+      if (cleanLogo) {
+        setShopProfile((prev) => ({ ...prev, logo: cleanLogo }));
+      }
+    }
+    if (remoteStoreProfile.storeName && remoteStoreProfile.storeName.trim()) {
+      const nextName = remoteStoreProfile.storeName.trim();
+      setShopProfile((prev) => ({ ...prev, name: nextName }));
+      setUiConfig((prev) => ({
+        ...prev,
+        theme: { ...prev.theme, storeTitle: nextName }
+      }));
+    }
+    if (remoteStoreProfile.location && remoteStoreProfile.location.trim()) {
+      const nextLoc = remoteStoreProfile.location.trim();
+      setShopProfile((prev) => ({ ...prev, address: nextLoc }));
+    }
+    if (remoteStoreProfile.upiId && remoteStoreProfile.upiId.trim()) {
+      const nextUpi = remoteStoreProfile.upiId.trim();
+      setShopProfile((prev) => ({ ...prev, upiId: nextUpi }));
+    }
+    if (remoteStoreProfile.festivalConfigJson) {
+      const updatedStudio = festivalPreferenceStore.applyRemoteJson(
+        remoteStoreProfile.festivalConfigJson,
+        festivalStudioRef.current
+      );
+      if (updatedStudio) {
+        setFestivalStudioConfig(updatedStudio);
+        setAnnouncementTick(Date.now());
+      }
+    }
+    if (remoteStoreProfile.userRolesJson) {
+      authService.applyRemoteUserRoles(
+        remoteStoreProfile.userRolesJson,
+        remoteStoreProfile.updatedAt
+      );
+    }
   }, []);
 
   // Sync to local storage
@@ -285,9 +463,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   useEffect(() => saveLocal('selected_logo', selectedLogo), [selectedLogo]);
   useEffect(() => saveLocal('store_custom_banner', bannerUrl), [bannerUrl]);
   useEffect(() => saveLocal('store_custom_logo', logoUrl), [logoUrl]);
-  useEffect(() => saveLocal('is_authed', isAuthed), [isAuthed]);
-  useEffect(() => saveLocal('is_pin_locked', isPinLocked), [isPinLocked]);
-  useEffect(() => saveLocal('admin_pin', adminPin), [adminPin]);
 
   // Initial fetch from live Supabase DB
   const refreshFromSupabase = useCallback(async (isSilent = false) => {
@@ -350,18 +525,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       if (storeProfileResult.status === 'fulfilled' && storeProfileResult.value) {
-        const remoteStoreProfile = storeProfileResult.value;
-        if (remoteStoreProfile.bannerUrl !== undefined) {
-          setBannerUrl(remoteStoreProfile.bannerUrl);
-          saveLocal("store_custom_banner", remoteStoreProfile.bannerUrl);
-        }
-        if (remoteStoreProfile.logoUrl !== undefined) {
-          setLogoUrl(remoteStoreProfile.logoUrl);
-          saveLocal("store_custom_logo", remoteStoreProfile.logoUrl);
-          if (remoteStoreProfile.logoUrl) {
-            setShopProfile((prev) => ({ ...prev, logo: remoteStoreProfile.logoUrl! }));
-          }
-        }
+        applyRemoteStoreProfile(storeProfileResult.value);
         anySuccess = true;
       }
 
@@ -374,26 +538,19 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       console.warn('Could not sync with Supabase, using local cache', e);
       setSupabaseStatus('offline');
     }
-  }, [showToast]);
+  }, [showToast, applyRemoteStoreProfile]);
 
   useEffect(() => {
-    refreshFromSupabase();
+    refreshFromSupabase(true);
+    if (authService.getSnapshot().isAuthed) {
+      authService.refreshCurrentUserRole().catch(() => {});
+    }
 
     // Connect realtime WebSocket
     supabaseService.connectRealtime({
-      onStoreProfileChanged: (banner: string | null, logo: string | null) => {
+      onStoreProfileChanged: (profile: RemoteStoreProfile) => {
         setIsRealtimeLive(true);
-        if (banner !== undefined) {
-          setBannerUrl(banner);
-          saveLocal("store_custom_banner", banner);
-        }
-        if (logo !== undefined) {
-          setLogoUrl(logo);
-          saveLocal("store_custom_logo", logo);
-          if (logo) {
-            setShopProfile((prev) => ({ ...prev, logo }));
-          }
-        }
+        applyRemoteStoreProfile(profile);
       },
       onItemChanged: (type: string, record: any, oldId?: string) => {
         setIsRealtimeLive(true);
@@ -638,44 +795,149 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       clearInterval(pollInterval);
       supabaseService.disconnectRealtime();
     };
-  }, [refreshFromSupabase]);
+  }, [refreshFromSupabase, applyRemoteStoreProfile]);
 
-
-  // Admin and Auth functions
-  const unlockAdmin = (pin: string): boolean => {
-    if (pin.trim() === adminPin || pin.trim() === '1234') {
-      setIsAdmin(true);
-      showToast('Admin Mode unlocked');
-      return true;
+  // Refresh data & verify role whenever auth state turns true
+  useEffect(() => {
+    if (authSnapshot.isAuthed) {
+      refreshFromSupabase(true);
+      authService.refreshCurrentUserRole().catch(() => {});
     }
-    showToast('Incorrect Admin PIN');
-    return false;
-  };
+  }, [authSnapshot.isAuthed, refreshFromSupabase]);
 
-  const exitAdmin = () => {
-    setIsAdmin(false);
-    showToast('Admin Mode exited');
-  };
+  // Auth & Role actions
+  const signInEmailPassword = useCallback(
+    (email: string, password: string) => authService.signInEmailPassword(email, password),
+    []
+  );
+  const signUpEmailPassword = useCallback(
+    (email: string, password: string) => authService.signUpEmailPassword(email, password),
+    []
+  );
+  const verifySignupOtp = useCallback(
+    (email: string, otp: string) => authService.verifySignupOtp(email, otp),
+    []
+  );
+  const resendConfirmationEmail = useCallback(
+    (email: string) => authService.resendConfirmationEmail(email),
+    []
+  );
+  const requestPasswordResetOtp = useCallback(
+    (email: string) => authService.requestPasswordResetOtp(email),
+    []
+  );
+  const verifyPasswordResetAndUpdate = useCallback(
+    (email: string, otp: string, newPassword: string) =>
+      authService.verifyPasswordResetAndUpdate(email, otp, newPassword),
+    []
+  );
+  const requestChangeEmailOtp = useCallback(
+    (newEmail: string) => authService.requestChangeEmailOtp(newEmail),
+    []
+  );
+  const confirmChangeEmailOtp = useCallback(
+    (newEmail: string, otp: string) => authService.confirmChangeEmailOtp(newEmail, otp),
+    []
+  );
+  const requestDeleteAccountOtp = useCallback(() => authService.requestDeleteAccountOtp(), []);
+  const confirmDeleteAccountWithOtp = useCallback(
+    (otp: string) => authService.confirmDeleteAccountWithOtp(otp),
+    []
+  );
+  const clearPendingVerification = useCallback(() => authService.clearPendingVerification(), []);
+  const clearAuthStatusMessages = useCallback(() => authService.clearDeepLinkStatus(), []);
 
-  const setAppAuthed = (authed: boolean) => {
-    setIsAuthed(authed);
-  };
+  const logout = useCallback(() => {
+    authService.logout(true);
+    showToast('Signed out');
+  }, [showToast]);
 
-  const setPinLockEnabled = (enabled: boolean) => {
-    setIsPinLocked(enabled);
-    if (!enabled) setIsAuthed(true);
-    showToast(enabled ? 'App Lock PIN enabled' : 'App Lock PIN disabled');
-  };
+  const refreshCurrentUserRole = useCallback(
+    async (showFeedback = false): Promise<boolean> => {
+      const resolvedAdmin = await authService.refreshCurrentUserRole();
+      if (showFeedback) {
+        showToast(resolvedAdmin ? 'Admin role verified & active' : 'Role synced: Staff Operator');
+      }
+      return resolvedAdmin;
+    },
+    [showToast]
+  );
 
-  const changeAdminPin = (oldPin: string, newPin: string): boolean => {
-    if (oldPin === adminPin || oldPin === '1234') {
-      setAdminPin(newPin);
-      showToast('Admin PIN updated successfully');
-      return true;
-    }
-    showToast('Current PIN does not match');
-    return false;
-  };
+  const syncUserRolesFromCloud = useCallback(
+    async (showFeedback = false): Promise<boolean> => {
+      const ok = await authService.syncUsersFromCloud();
+      if (ok && showFeedback) {
+        showToast('User roles synced from database');
+      }
+      return ok;
+    },
+    [showToast]
+  );
+
+  const upsertUserRole = useCallback(async (email: string, isAdminVal: boolean) => {
+    await authService.upsertUser(email, isAdminVal);
+  }, []);
+
+  const removeUserRole = useCallback(async (email: string) => {
+    await authService.removeUser(email);
+  }, []);
+
+  const setUserAdminRole = useCallback(async (email: string, isAdminVal: boolean) => {
+    await authService.setUserAdminRole(email, isAdminVal);
+  }, []);
+
+  // Save & Sync Announcement Studio (supports multiple custom cards & Cloudinary banner uploads)
+  const saveAndSyncFestivalStudio = useCallback(
+    async (
+      config: FestivalStudioConfig,
+      bannerFilesByIndex: Record<number, File> = {}
+    ): Promise<boolean> => {
+      let uploadSucceeded = true;
+      const cards = [...getEffectiveCustomFestivals(config)];
+      for (const [idxStr, file] of Object.entries(bannerFilesByIndex)) {
+        const idx = Number(idxStr);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= cards.length || !file) continue;
+        try {
+          const uploadedUrl = await supabaseService.uploadImageToCloudinary(file);
+          if (uploadedUrl) {
+            cards[idx] = { ...cards[idx], bannerImageUrl: uploadedUrl };
+          } else {
+            uploadSucceeded = false;
+          }
+        } catch (e) {
+          console.warn('Festival banner upload failed:', e);
+          uploadSucceeded = false;
+        }
+      }
+
+      const finalConfig: FestivalStudioConfig = {
+        ...config,
+        customFestival: cards[0] || config.customFestival,
+        customFestivals: cards,
+        updatedAt: Date.now()
+      };
+
+      const { normalized, json } = festivalPreferenceStore.save(finalConfig);
+      setFestivalStudioConfig(normalized);
+      setAnnouncementTick(Date.now());
+      setIsAnnouncementDismissed(false);
+
+      const syncOk = await supabaseService.saveStoreProfile({
+        festivalConfigJson: json,
+        updatedAt: normalized.updatedAt
+      });
+
+      if (uploadSucceeded && syncOk) {
+        showToast('Announcement Studio saved & synced across devices!');
+      } else if (syncOk) {
+        showToast('Saved Announcement Studio settings. Custom image upload had an issue.');
+      } else {
+        showToast('Saved locally. Cloud sync will retry when online.');
+      }
+      return uploadSucceeded && syncOk;
+    },
+    [showToast]
+  );
 
   // Item management with Supabase sync
   const addItem = async (itemData: Omit<Item, 'id' | 'updatedAt'>): Promise<Item> => {
@@ -1664,7 +1926,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const updateStoreBanner = async (url: string | null) => {
     setBannerUrl(url);
     saveLocal("store_custom_banner", url);
-    await supabaseService.saveStoreProfile(url, logoUrlRef.current);
+    await supabaseService.saveStoreProfile({ bannerUrl: url || '', updatedAt: Date.now() });
     showToast("Store cover banner updated & synced!");
   };
 
@@ -1674,7 +1936,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     if (url) {
       setShopProfile((prev) => ({ ...prev, logo: url }));
     }
-    await supabaseService.saveStoreProfile(bannerUrlRef.current, url);
+    await supabaseService.saveStoreProfile({ logoUrl: url || '', updatedAt: Date.now() });
     showToast("Store logo updated & synced!");
   };
 
@@ -1683,7 +1945,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setLogoUrl(logoPath);
     saveLocal("store_custom_logo", logoPath);
     setShopProfile((prev) => ({ ...prev, logo: logoPath }));
-    supabaseService.saveStoreProfile(bannerUrlRef.current, logoPath);
+    supabaseService.saveStoreProfile({ logoUrl: logoPath, updatedAt: Date.now() });
     showToast("Store logo updated");
   };
 
@@ -1751,15 +2013,41 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         supabaseStatus,
         isRealtimeLive,
         refreshFromSupabase,
-        isAuthed,
-        isAdmin,
-        isPinLocked,
-        adminPin,
-        unlockAdmin,
-        exitAdmin,
-        setAppAuthed,
-        setPinLockEnabled,
-        changeAdminPin,
+        isAuthed: authSnapshot.isAuthed,
+        isAdmin: authSnapshot.isAdmin,
+        currentUserEmail: authSnapshot.currentUserEmail,
+        pendingVerificationEmail: authSnapshot.pendingVerificationEmail,
+        registeredUsers: authSnapshot.registeredUsers,
+        lockRemainingSeconds: authSnapshot.lockRemainingSeconds,
+        otpRemainingSeconds: authSnapshot.otpRemainingSeconds,
+        resendCooldownSeconds: authSnapshot.resendCooldownSeconds,
+        deepLinkMessage: authSnapshot.deepLinkMessage,
+        deepLinkError: authSnapshot.deepLinkError,
+        signInEmailPassword,
+        signUpEmailPassword,
+        verifySignupOtp,
+        resendConfirmationEmail,
+        requestPasswordResetOtp,
+        verifyPasswordResetAndUpdate,
+        requestChangeEmailOtp,
+        confirmChangeEmailOtp,
+        requestDeleteAccountOtp,
+        confirmDeleteAccountWithOtp,
+        clearPendingVerification,
+        clearAuthStatusMessages,
+        logout,
+        refreshCurrentUserRole,
+        syncUserRolesFromCloud,
+        upsertUserRole,
+        removeUserRole,
+        setUserAdminRole,
+        festivalStudioConfig,
+        activeFestivals,
+        activeAnnouncement,
+        isAnnouncementDismissed,
+        dismissAnnouncement,
+        effectiveThemeColor,
+        saveAndSyncFestivalStudio,
         addItem,
         updateItem,
         deleteItem,

@@ -58,14 +58,16 @@ class TabErrorBoundary extends React.Component<
 }
 
 const MainAppContent: React.FC = () => {
-  const { isPinLocked, isAuthed, toastMessage, shopProfile, themeColor } = useStock();
+  const { isAuthed, toastMessage, shopProfile, effectiveThemeColor } = useStock();
 
   const hexToRgba = (hex: string, alpha: number) => {
     if (!hex || hex[0] !== '#') return `rgba(59, 130, 246, ${alpha})`;
     try {
-      const r = parseInt(hex.slice(1, 3), 16);
-      const g = parseInt(hex.slice(3, 5), 16);
-      const b = parseInt(hex.slice(5, 7), 16);
+      const clean = hex.slice(1);
+      const rgbHex = clean.length === 8 ? clean.slice(2) : clean;
+      const r = parseInt(rgbHex.slice(0, 2), 16);
+      const g = parseInt(rgbHex.slice(2, 4), 16);
+      const b = parseInt(rgbHex.slice(4, 6), 16);
       return `rgba(${r}, ${g}, ${b}, ${alpha})`;
     } catch {
       return `rgba(59, 130, 246, ${alpha})`;
@@ -100,7 +102,7 @@ const MainAppContent: React.FC = () => {
   // Low stock filter trigger from Home
   const [lowStockFilterActive, setLowStockFilterActive] = useState(false);
 
-  if (isPinLocked && !isAuthed) {
+  if (!isAuthed) {
     return <AuthGateScreen />;
   }
 
@@ -133,18 +135,18 @@ const MainAppContent: React.FC = () => {
     <div className="min-h-screen bg-slate-100/70 text-slate-900 flex flex-col font-sans w-full max-w-full overflow-x-hidden">
       <style>{`
         :root {
-          --color-blue-50: ${hexToRgba(themeColor, 0.08)} !important;
-          --color-blue-100: ${hexToRgba(themeColor, 0.15)} !important;
-          --color-blue-200: ${hexToRgba(themeColor, 0.25)} !important;
-          --color-blue-500: ${themeColor} !important;
-          --color-blue-600: ${themeColor} !important;
-          --color-blue-700: ${hexToRgba(themeColor, 0.85)} !important;
-          --color-blue-900: ${hexToRgba(themeColor, 0.95)} !important;
-          --color-brand-blue: ${themeColor} !important;
-          --color-brand-blue-dark: ${hexToRgba(themeColor, 0.85)} !important;
-          --color-indigo-600: ${themeColor} !important;
-          --color-indigo-700: ${hexToRgba(themeColor, 0.85)} !important;
-          --color-indigo-50: ${hexToRgba(themeColor, 0.08)} !important;
+          --color-blue-50: ${hexToRgba(effectiveThemeColor, 0.08)} !important;
+          --color-blue-100: ${hexToRgba(effectiveThemeColor, 0.15)} !important;
+          --color-blue-200: ${hexToRgba(effectiveThemeColor, 0.25)} !important;
+          --color-blue-500: ${effectiveThemeColor} !important;
+          --color-blue-600: ${effectiveThemeColor} !important;
+          --color-blue-700: ${hexToRgba(effectiveThemeColor, 0.85)} !important;
+          --color-blue-900: ${hexToRgba(effectiveThemeColor, 0.95)} !important;
+          --color-brand-blue: ${effectiveThemeColor} !important;
+          --color-brand-blue-dark: ${hexToRgba(effectiveThemeColor, 0.85)} !important;
+          --color-indigo-600: ${effectiveThemeColor} !important;
+          --color-indigo-700: ${hexToRgba(effectiveThemeColor, 0.85)} !important;
+          --color-indigo-50: ${hexToRgba(effectiveThemeColor, 0.08)} !important;
         }
       `}</style>
       {/* Top Navigation Bar */}

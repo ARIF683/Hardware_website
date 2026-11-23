@@ -190,3 +190,65 @@ export interface ParsedTintRow {
   shadeName?: string;
   shadeCode?: string;
 }
+
+export interface UserAccount {
+  email: string;
+  isAdmin: boolean;
+}
+
+export type AnnouncementSeverity = 'info' | 'success' | 'warning' | 'alert';
+
+export interface AnnouncementConfig {
+  enabled: boolean;
+  message: string;
+  severity: AnnouncementSeverity;
+  dismissible: boolean;
+  startAtMillis: number;
+  endAtMillis: number;
+}
+
+export interface FestivalConfig {
+  enabled: boolean;
+  festivalName: string;
+  greetingMessage: string;
+  badgeText: string;
+  accentColorHex: string;
+  bannerImageUrl: string;
+  startDate: string; // YYYY-MM-DD or ""
+  endDate: string;   // YYYY-MM-DD or ""
+  stylePreset: string; // diwali | eid | holi | christmas | new_year | independence_day | sale | default
+}
+
+export type FestivalOverrideMode = 'AUTO' | 'CUSTOM' | 'OFF';
+
+export interface FestivalStudioConfig {
+  autoCalendarEnabled: boolean;
+  applyFestivalThemeToApp: boolean;
+  overrideMode: FestivalOverrideMode;
+  customFestival: FestivalConfig;
+  customFestivals: FestivalConfig[];
+  hiddenAutoFestivalKeys: string[];
+  announcement: AnnouncementConfig;
+  updatedAt: number;
+}
+
+export interface RemoteStoreProfile {
+  bannerUrl?: string | null;
+  logoUrl?: string | null;
+  storeName?: string | null;
+  location?: string | null;
+  roleTitle?: string | null;
+  supervisorName?: string | null;
+  bankName?: string | null;
+  accountHolder?: string | null;
+  accountNumber?: string | null;
+  ifscCode?: string | null;
+  branchName?: string | null;
+  upiId?: string | null;
+  signatureUrl?: string | null;
+  qrCodeUrl?: string | null;
+  festivalConfigJson?: string | null;
+  userRolesJson?: string | null;
+  updatedAt: number;
+}
+

@@ -1,30 +1,38 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Store,
-  Shield,
   ShieldCheck,
-  ShieldAlert,
   Database,
   Download,
   Upload,
   RefreshCw,
   Trash2,
   Check,
-  Palette,
   Sliders,
   Sparkles,
   Cloud,
-  QrCode,
   Save,
   Lock,
-  Unlock,
-  KeyRound,
-  Paintbrush
+  Paintbrush,
+  Users,
+  Mail,
+  LogOut,
+  AlertTriangle,
+  ChevronRight,
+  Loader2,
+  Megaphone
 } from 'lucide-react';
 import { ColorMachineTintModal } from './ColorMachineTintModal';
+import { AnnouncementStudioModal } from './AnnouncementStudioModal';
+import {
+  AdminUserManagementModal,
+  ChangeEmailOtpModal,
+  DeleteAccountOtpModal
+} from './AccountDialogs';
 import { useStock } from '../context/StockContext';
 import { ShopProfile } from '../types';
 import { SUPABASE_URL, SUPABASE_KEY, supabaseService, cleanSupabaseUrl } from '../services/supabaseService';
+import { FESTIVAL_MODE_CUSTOM, FESTIVAL_MODE_OFF, getEffectiveCustomFestivals } from '../utils/festivalStudio';
 
 export const SettingsScreen: React.FC = () => {
   const {
@@ -35,20 +43,21 @@ export const SettingsScreen: React.FC = () => {
     selectedLogo,
     selectLogo,
     isAdmin,
+    currentUserEmail,
+    registeredUsers,
+    festivalStudioConfig,
+    activeFestivals,
+    activeAnnouncement,
     themeColor,
     setThemeColor,
-    unlockAdmin,
-    exitAdmin,
-    isPinLocked,
-    setPinLockEnabled,
-    changeAdminPin,
+    refreshCurrentUserRole,
+    logout,
     clearTransactions,
     resetToDemoData,
     exportDataJson,
     importDataJson,
     showToast,
     supabaseStatus,
-    isRealtimeLive,
     items,
     refreshFromSupabase
   } = useStock();
@@ -56,13 +65,24 @@ export const SettingsScreen: React.FC = () => {
   // Profile local form
   const [profileForm, setProfileForm] = useState<ShopProfile>(shopProfile);
 
-  // Admin PIN modal
-  const [pinInput, setPinInput] = useState('');
-  const [showPinModal, setShowPinModal] = useState(false);
-  const [oldPin, setOldPin] = useState('');
-  const [newPin, setNewPin] = useState('');
-  const [showChangePinModal, setShowChangePinModal] = useState(false);
+  // Account & Studio modals
+  const [showAnnouncementStudio, setShowAnnouncementStudio] = useState(false);
+  const [showUserManagement, setShowUserManagement] = useState(false);
+  const [showChangeEmailModal, setShowChangeEmailModal] = useState(false);
+  const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [confirmClearTx, setConfirmClearTx] = useState(false);
+  const [confirmResetDemo, setConfirmResetDemo] = useState(false);
+  const [isRefreshingRole, setIsRefreshingRole] = useState(false);
   const [showColorMachineModal, setShowColorMachineModal] = useState(false);
+
+  // Automatically close admin-only modals if role is revoked remotely
+  useEffect(() => {
+    if (!isAdmin) {
+      setShowAnnouncementStudio(false);
+      setShowUserManagement(false);
+    }
+  }, [isAdmin]);
 
   // Supabase live config
   const [supabaseUrl, setSupabaseUrl] = useState(
@@ -139,67 +159,182 @@ export const SettingsScreen: React.FC = () => {
     showToast('Restored default Supabase connection');
   };
 
+  // Compute Announcement Studio live status summary (matching Android SettingsScreen)
+  const noticeActive = activeAnnouncement.enabled && activeAnnouncement.message.trim().length > 0;
+  const noticeScheduled =
+    !noticeActive &&
+    festivalStudioConfig.announcement.enabled &&
+    festivalStudioConfig.announcement.message.trim().length > 0;
+  const customActiveCount = getEffectiveCustomFestivals(festivalStudioConfig).filter((f) => f.enabled).length;
+  const festSummary =
+    festivalStudioConfig.overrideMode === FESTIVAL_MODE_OFF
+      ? 'Festivals Off'
+      : festivalStudioConfig.overrideMode === FESTIVAL_MODE_CUSTOM
+      ? customActiveCount > 0
+        ? `${customActiveCount} Custom Card${customActiveCount > 1 ? 's' : ''}`
+        : 'Custom Inactive'
+      : (() => {
+          const calLabel = festivalStudioConfig.autoCalendarEnabled
+            ? 'Calendar + Custom'
+            : 'Custom Only';
+          return activeFestivals.length > 0 ? `${calLabel} (${activeFestivals.length} live)` : calLabel;
+        })();
+  const studioSummary = noticeActive
+    ? `Notice Live • ${festSummary}`
+    : noticeScheduled
+    ? `Notice Scheduled • ${festSummary}`
+    : `${festSummary} • Notices & Festivals`;
+
   return (
     <div className="space-y-6 pb-24 md:pb-8 max-w-4xl mx-auto">
-      {/* Admin Mode Status Banner */}
-      <div
-        className={`p-4 sm:p-5 rounded-2xl border transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 ${
-          isAdmin
-            ? 'bg-blue-50/80 border-blue-200 text-blue-900'
-            : 'bg-slate-50 border-slate-200 text-slate-800'
-        }`}
-      >
-        <div className="flex items-center gap-3">
-          <div
-            className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-              isAdmin ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'
-            }`}
-          >
-            {isAdmin ? <ShieldCheck className="w-5 h-5" /> : <Lock className="w-5 h-5" />}
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-bold">
-                {isAdmin ? 'Admin Mode is Active' : 'Standard Cashier Mode'}
-              </h3>
-              {isAdmin && (
-                <span className="px-2 py-0.5 text-[10px] font-bold bg-blue-600 text-white rounded-md uppercase">
-                  UNLOCKED
-                </span>
-              )}
+      {/* Account, Role & Admin Studio Card */}
+      <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
+        {/* Role Access Row (Tap to refresh role from database) */}
+        <div
+          onClick={async () => {
+            if (isRefreshingRole) return;
+            setIsRefreshingRole(true);
+            await refreshCurrentUserRole(true);
+            setIsRefreshingRole(false);
+          }}
+          className={`p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 cursor-pointer transition-colors ${
+            isAdmin ? 'bg-blue-50/70 hover:bg-blue-50' : 'bg-slate-50/80 hover:bg-slate-100/70'
+          }`}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div
+              className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                isAdmin ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-600'
+              }`}
+            >
+              {isAdmin ? <ShieldCheck className="w-5 h-5" /> : <Lock className="w-5 h-5" />}
             </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {isAdmin
-                ? 'Restricted settings and database actions are available.'
-                : 'Enter your PIN or triple-tap the gear icon to unlock.'}
-            </p>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-sm font-bold text-slate-900">
+                  {isAdmin ? 'Admin Role Active' : 'Staff Operator Access'}
+                </h3>
+                <span
+                  className={`px-2 py-0.5 text-[10px] font-extrabold rounded-md uppercase tracking-wide ${
+                    isAdmin ? 'bg-blue-600 text-white' : 'bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {isAdmin ? 'ADMIN' : 'STAFF'}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5 truncate">
+                {currentUserEmail || 'Signed in account'} •{' '}
+                {isAdmin
+                  ? 'Manage Announcement Studio & staff roles below'
+                  : 'Tap to refresh role from database'}
+              </p>
+            </div>
           </div>
+
+          <button
+            type="button"
+            disabled={isRefreshingRole}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-slate-700 shadow-2xs shrink-0 whitespace-nowrap"
+          >
+            {isRefreshingRole ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+            ) : (
+              <RefreshCw className="w-3.5 h-3.5 text-blue-600" />
+            )}
+            <span>Sync Role</span>
+          </button>
         </div>
 
-        <div className="flex items-center gap-2">
-          {isAdmin ? (
-            <>
-              <button
-                onClick={() => setShowChangePinModal(true)}
-                className="px-3 py-1.5 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-xl border border-slate-200 transition-colors"
-              >
-                Change PIN
-              </button>
-              <button
-                onClick={exitAdmin}
-                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-colors shadow-xs"
-              >
-                Exit Admin
-              </button>
-            </>
-          ) : (
+        {/* Admin-only Quick Rows: Announcement Studio + Staff & Admin Accounts */}
+        {isAdmin && (
+          <div className="divide-y divide-slate-100 border-t border-slate-100">
             <button
-              onClick={() => setShowPinModal(true)}
-              className="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-colors shadow-xs"
+              type="button"
+              onClick={() => setShowAnnouncementStudio(true)}
+              className="w-full px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50 transition-colors text-left"
             >
-              Unlock Admin
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0">
+                  <Megaphone className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-slate-900">Announcement Studio</div>
+                  <div className="text-xs text-slate-500 truncate">{studioSummary}</div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-bold uppercase whitespace-nowrap">
+                  Admin
+                </span>
+                <ChevronRight className="w-4 h-4 text-slate-400" />
+              </div>
             </button>
-          )}
+
+            <button
+              type="button"
+              onClick={() => setShowUserManagement(true)}
+              className="w-full px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50 transition-colors text-left"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                  <Users className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <div className="text-sm font-bold text-slate-900">Staff & Admin Accounts</div>
+                  <div className="text-xs text-slate-500 truncate">
+                    Add, remove, or promote staff and admin accounts
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-bold whitespace-nowrap tabular-nums">
+                  {registeredUsers.length} Users
+                </span>
+                <ChevronRight className="w-4 h-4 text-slate-400" />
+              </div>
+            </button>
+          </div>
+        )}
+
+        {/* Account Management Actions */}
+        <div className="divide-y divide-slate-100 border-t border-slate-100">
+          <button
+            type="button"
+            onClick={() => setShowChangeEmailModal(true)}
+            className="w-full px-4 sm:px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50 transition-colors text-left"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
+                <Mail className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-bold text-slate-900">Change Email Address</div>
+                <div className="text-xs text-slate-500 truncate">
+                  {currentUserEmail || 'Update login email via OTP verification'}
+                </div>
+              </div>
+            </div>
+            <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
+          </button>
+
+          <div className="p-4 sm:px-5 flex flex-col sm:flex-row gap-2.5 bg-slate-50/40">
+            <button
+              type="button"
+              onClick={() => setShowLogoutConfirm(true)}
+              className="flex-1 py-2.5 px-4 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-bold flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Sign Out from Terminal</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowDeleteAccountModal(true)}
+              className="flex-1 py-2.5 px-4 rounded-xl bg-white hover:bg-rose-50 text-rose-700 border border-rose-200 text-xs font-semibold flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span>Delete Account (OTP Verified)</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -656,132 +791,136 @@ export const SettingsScreen: React.FC = () => {
           </span>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => {
-                if (confirm('Reset catalog, transactions, and khata to default demo items?')) {
-                  resetToDemoData();
-                }
-              }}
-              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors flex items-center gap-1.5"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              <span>Reset to Sample Data</span>
-            </button>
-
-            {isAdmin && (
+            {!confirmResetDemo ? (
               <button
-                onClick={() => {
-                  if (confirm('Clear all historical transactions? Inventory balances will remain unchanged.')) {
-                    clearTransactions();
-                  }
-                }}
-                className="px-3.5 py-2 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold rounded-xl transition-colors flex items-center gap-1.5"
+                type="button"
+                onClick={() => setConfirmResetDemo(true)}
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors flex items-center gap-1.5"
               >
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>Clear Transaction History</span>
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Refresh All From Cloud</span>
               </button>
+            ) : (
+              <div className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1.5 rounded-xl">
+                <span className="text-xs font-semibold text-slate-700">Reload from cloud?</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    resetToDemoData();
+                    setConfirmResetDemo(false);
+                  }}
+                  className="px-2.5 py-1 bg-blue-600 text-white text-[11px] font-bold rounded-lg"
+                >
+                  Confirm
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmResetDemo(false)}
+                  className="px-2 py-1 text-slate-600 text-[11px] font-semibold"
+                >
+                  Cancel
+                </button>
+              </div>
             )}
+
+            {isAdmin &&
+              (!confirmClearTx ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirmClearTx(true)}
+                  className="px-3.5 py-2 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold rounded-xl transition-colors flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Clear Transaction History</span>
+                </button>
+              ) : (
+                <div className="flex items-center gap-1.5 bg-red-50 px-2.5 py-1.5 rounded-xl border border-red-200">
+                  <span className="text-xs font-semibold text-red-700">Clear local logs?</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clearTransactions();
+                      setConfirmClearTx(false);
+                    }}
+                    className="px-2.5 py-1 bg-red-600 text-white text-[11px] font-bold rounded-lg"
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmClearTx(false)}
+                    className="px-2 py-1 text-red-700 text-[11px] font-semibold"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ))}
           </div>
         </div>
       </div>
 
-      {/* Unlock Admin PIN Modal */}
-      {showPinModal && (
+      {/* Sign Out Confirmation Modal */}
+      {showLogoutConfirm && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
-            <h3 className="text-base font-bold text-slate-900">Enter Admin PIN</h3>
-            <p className="text-xs text-slate-500 mt-1">
-              Default PIN is <strong className="font-mono text-slate-800">1234</strong>
-            </p>
-            <input
-              type="password"
-              maxLength={8}
-              value={pinInput}
-              onChange={(e) => setPinInput(e.target.value)}
-              placeholder="PIN"
-              className="mt-4 w-full px-4 py-2.5 text-center text-xl font-mono tracking-widest border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              autoFocus
-            />
-            <div className="flex gap-2 mt-4">
+          <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Sign Out?</h3>
+                <p className="text-xs text-slate-500">
+                  You will return to the account sign-in screen.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setShowPinModal(false);
-                  setPinInput('');
-                }}
-                className="flex-1 py-2 text-xs font-semibold text-slate-600 bg-slate-100 rounded-xl"
+                onClick={() => setShowLogoutConfirm(false)}
+                className="flex-1 py-2.5 text-xs font-semibold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={() => {
-                  if (unlockAdmin(pinInput)) {
-                    setShowPinModal(false);
-                    setPinInput('');
-                  }
+                  setShowLogoutConfirm(false);
+                  logout();
                 }}
-                className="flex-1 py-2 text-xs font-bold text-white bg-blue-600 rounded-xl shadow-xs"
+                className="flex-1 py-2.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs"
               >
-                Unlock
+                Sign Out
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Change PIN Modal */}
-      {showChangePinModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl p-6 w-full max-w-sm shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95">
-            <h3 className="text-base font-bold text-slate-900">Change Admin PIN</h3>
-            <div className="space-y-3 mt-4 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-600 mb-1">Current PIN</label>
-                <input
-                  type="password"
-                  value={oldPin}
-                  onChange={(e) => setOldPin(e.target.value)}
-                  placeholder="Enter current PIN"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono"
-                />
-              </div>
-              <div>
-                <label className="block font-semibold text-slate-600 mb-1">New PIN</label>
-                <input
-                  type="password"
-                  value={newPin}
-                  onChange={(e) => setNewPin(e.target.value)}
-                  placeholder="Enter new 4-digit PIN"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono"
-                />
-              </div>
-            </div>
-            <div className="flex gap-2 mt-5">
-              <button
-                type="button"
-                onClick={() => setShowChangePinModal(false)}
-                className="flex-1 py-2 text-xs font-semibold text-slate-600 bg-slate-100 rounded-xl"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (changeAdminPin(oldPin, newPin)) {
-                    setShowChangePinModal(false);
-                    setOldPin('');
-                    setNewPin('');
-                  }
-                }}
-                className="flex-1 py-2 text-xs font-bold text-white bg-blue-600 rounded-xl shadow-xs"
-              >
-                Update PIN
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Announcement Studio Modal (Admin) */}
+      <AnnouncementStudioModal
+        isOpen={showAnnouncementStudio}
+        onClose={() => setShowAnnouncementStudio(false)}
+      />
+
+      {/* Staff & Admin Accounts Modal (Admin) */}
+      <AdminUserManagementModal
+        isOpen={showUserManagement}
+        onClose={() => setShowUserManagement(false)}
+      />
+
+      {/* Change Email OTP Modal */}
+      <ChangeEmailOtpModal
+        isOpen={showChangeEmailModal}
+        onClose={() => setShowChangeEmailModal(false)}
+      />
+
+      {/* Delete Account OTP Modal */}
+      <DeleteAccountOtpModal
+        isOpen={showDeleteAccountModal}
+        onClose={() => setShowDeleteAccountModal(false)}
+      />
+
       {showColorMachineModal && (
         <ColorMachineTintModal
           isOpen={showColorMachineModal}

@@ -22,6 +22,7 @@ import { useStock } from '../context/StockContext';
 import { NavigationTab, Item } from '../types';
 import { formatRupees, formatDateTime } from '../utils/formatters';
 import { supabaseService } from '../services/supabaseService';
+import { AnnouncementBanner, FestivalCarouselSection, FestivalHeaderPill } from './FestivalComponents';
 
 interface HomeScreenProps {
   onNavigateTab: (tab: NavigationTab) => void;
@@ -38,7 +39,22 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   onOpenNewItem,
   onFilterLowStock,
 }) => {
-  const { items, transactions, quotations, ledgerAccounts, uiConfig, showToast, bannerUrl, logoUrl, updateStoreBanner, updateStoreLogo } = useStock();
+  const {
+    items,
+    transactions,
+    quotations,
+    ledgerAccounts,
+    uiConfig,
+    showToast,
+    bannerUrl,
+    logoUrl,
+    updateStoreBanner,
+    updateStoreLogo,
+    activeFestivals,
+    activeAnnouncement,
+    isAnnouncementDismissed,
+    dismissAnnouncement,
+  } = useStock();
   const [isUploadingBanner, setIsUploadingBanner] = useState(false);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
   const [logoImgError, setLogoImgError] = useState(false);
@@ -223,6 +239,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
                 <p className="text-xs text-slate-500 font-medium truncate mt-0.5">
                   {uiConfig.theme.tagline || "Real-time Inventory & Smart Billing"}
                 </p>
+                {activeFestivals.length > 0 && (
+                  <div className="lg:hidden mt-1.5">
+                    <FestivalHeaderPill festivals={activeFestivals} />
+                  </div>
+                )}
               </div>
             </div>
 
@@ -246,6 +267,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Server-Driven + Auto-Calendar Festival Carousel */}
+      {activeFestivals.length > 0 && (
+        <FestivalCarouselSection festivals={activeFestivals} />
+      )}
+
+      {/* Admin-Synced Store Announcement Notice Banner */}
+      <AnnouncementBanner
+        announcement={activeAnnouncement}
+        dismissed={isAnnouncementDismissed}
+        onDismiss={dismissAnnouncement}
+      />
 
       {/* Quick Action Shortcuts (Quotes, Khata, +Bill) */}
       {uiConfig.features.showQuickActions && (
