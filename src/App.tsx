@@ -58,7 +58,7 @@ class TabErrorBoundary extends React.Component<
 }
 
 const MainAppContent: React.FC = () => {
-  const { isAuthed, toastMessage, shopProfile, effectiveThemeColor } = useStock();
+  const { isAuthed, isVerifyingSession, toastMessage, shopProfile, effectiveThemeColor } = useStock();
 
   const hexToRgba = (hex: string, alpha: number) => {
     if (!hex || hex[0] !== '#') return `rgba(59, 130, 246, ${alpha})`;
@@ -69,7 +69,8 @@ const MainAppContent: React.FC = () => {
       const g = parseInt(rgbHex.slice(2, 4), 16);
       const b = parseInt(rgbHex.slice(4, 6), 16);
       return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-    } catch {
+    } catch (e) {
+      console.warn('Invalid theme hex color fallback:', hex, e);
       return `rgba(59, 130, 246, ${alpha})`;
     }
   };
@@ -101,6 +102,16 @@ const MainAppContent: React.FC = () => {
 
   // Low stock filter trigger from Home
   const [lowStockFilterActive, setLowStockFilterActive] = useState(false);
+
+  if (isVerifyingSession && !isAuthed) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
+        <div className="w-10 h-10 rounded-full border-4 border-slate-200 border-t-blue-600 animate-spin mb-3" />
+        <p className="text-sm font-bold text-slate-800">Verifying session…</p>
+        <p className="text-xs text-slate-500 mt-1">Checking active account with authentication server</p>
+      </div>
+    );
+  }
 
   if (!isAuthed) {
     return <AuthGateScreen />;

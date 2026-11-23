@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { useStock } from '../context/StockContext';
 import { QuotationRecord, QuotationLineItem, QuotationStatus } from '../types';
-import { formatRupees, formatDate } from '../utils/formatters';
+import { formatRupees, formatDate, calcLineAmount, calcQuotationTotals } from '../utils/formatters';
 
 interface QuotationScreenProps {
   onOpenPrint: (type: 'quotation' | 'bill', data: QuotationRecord) => void;
@@ -130,24 +130,24 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
     return Number.isFinite(n) ? n : fallback;
   };
 
-  // Calculations for form (guarded against corrupted line items)
+  // Calculations for form (whole-paise integer arithmetic, guarded against corrupted line items)
   let subtotal = 0;
   let discountVal = 0;
-  let taxable = 0;
   let taxPct = 0;
   let taxAmount = 0;
   let grandTotal = 0;
   try {
     const safeLines = Array.isArray(lineItems) ? lineItems : [];
-    subtotal = safeLines.reduce((sum, item) => {
-      const lineTotal = safeNum(item?.total, 0);
-      return sum + lineTotal;
-    }, 0);
-    discountVal = Math.max(0, safeNum(parseFloat(overallDiscount), 0));
-    taxable = Math.max(0, subtotal - discountVal);
-    taxPct = Math.max(0, safeNum(parseFloat(taxPercent), 0));
-    taxAmount = Math.round(((taxable * taxPct) / 100) * 100) / 100;
-    grandTotal = Math.round((taxable + taxAmount) * 100) / 100;
+    const totals = calcQuotationTotals(
+      safeLines,
+      safeNum(parseFloat(overallDiscount), 0),
+      safeNum(parseFloat(taxPercent), 0)
+    );
+    subtotal = totals.subtotal;
+    discountVal = totals.discount;
+    taxPct = totals.taxPercent;
+    taxAmount = totals.taxAmount;
+    grandTotal = totals.grandTotal;
   } catch (calcErr) {
     console.error('[Billing/Quotation] Failed calculating quotation totals:', calcErr);
   }
@@ -164,9 +164,7 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
         const qty = Math.max(0, safeNum(cur.qty, 0));
         const unitPrice = Math.max(0, safeNum(cur.unitPrice, 0));
         const discPct = Math.max(0, Math.min(100, safeNum(cur.discountPercent, 0)));
-        const lineSub = qty * unitPrice;
-        const disc = (lineSub * discPct) / 100;
-        const computedTotal = Math.max(0, Math.round((lineSub - disc) * 100) / 100);
+        const computedTotal = calcLineAmount(qty, unitPrice, discPct);
         if (!Number.isFinite(computedTotal)) {
           throw new Error(`Invalid line total computed at row ${index + 1}`);
         }
@@ -256,8 +254,7 @@ export const QuotationScreen: React.FC<QuotationScreenProps> = ({ onOpenPrint })
           const qty = Math.max(0, safeNum(i.qty, 0));
           const unitPrice = Math.max(0, safeNum(i.unitPrice, 0));
           const discountPercent = Math.max(0, Math.min(100, safeNum(i.discountPercent, 0)));
-          const lineSub = qty * unitPrice;
-          const total = Math.max(0, Math.round((lineSub - (lineSub * discountPercent) / 100) * 100) / 100);
+          const total = calcLineAmount(qty, unitPrice, discountPercent);
           return {
             ...i,
             name: i.name.trim(),

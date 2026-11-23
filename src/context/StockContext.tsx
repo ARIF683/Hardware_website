@@ -18,20 +18,36 @@ import {
   RemoteStoreProfile
 } from '../types';
 import {
-  initialLedgerAccounts,
-  initialLedgerEntries,
-  initialCashflow,
   initialShopProfile,
   initialUiConfig
 } from '../data/mockData';
-import { supabaseService } from '../services/supabaseService';
+import { supabaseService, newId } from '../services/supabaseService';
 import { authService, AuthStateSnapshot, AuthActionResult } from '../services/authService';
 import {
   AutoFestivalCalendar,
+  createDefaultFestivalStudioConfig,
   festivalPreferenceStore,
   getEffectiveCustomFestivals,
   isAnnouncementActiveAt
 } from '../utils/festivalStudio';
+import { addMoney, calcLineAmount, fromPaise, toPaise } from '../utils/formatters';
+
+type RetryTask =
+  | { id: string; kind: 'upsertItem'; payload: Item }
+  | { id: string; kind: 'updateItemMeta'; payload: { id: string; patch: Record<string, any> } }
+  | { id: string; kind: 'adjustStock'; payload: { itemId: string; delta: number } }
+  | { id: string; kind: 'deleteItem'; payload: { id: string } }
+  | { id: string; kind: 'insertTransaction'; payload: TransactionRecord }
+  | { id: string; kind: 'upsertCashflow'; payload: DailyCashflowRecord }
+  | { id: string; kind: 'deleteCashflow'; payload: { id: string } }
+  | { id: string; kind: 'upsertQuotation'; payload: QuotationRecord }
+  | { id: string; kind: 'deleteQuotation'; payload: { id: string } }
+  | { id: string; kind: 'upsertLedgerAccount'; payload: LedgerAccount }
+  | { id: string; kind: 'deleteLedgerAccount'; payload: { id: string } }
+  | { id: string; kind: 'insertLedgerEntry'; payload: LedgerEntry }
+  | { id: string; kind: 'deleteLedgerEntry'; payload: { id: string } }
+  | { id: string; kind: 'insertPurchase'; payload: any }
+  | { id: string; kind: 'saveStoreProfile'; payload: Partial<RemoteStoreProfile> };
 
 interface StockContextType {
   // Data
@@ -56,6 +72,7 @@ interface StockContextType {
 
   // Auth & Role Management (Synced with Supabase Auth & app_users)
   isAuthed: boolean;
+  isVerifyingSession: boolean;
   isAdmin: boolean;
   currentUserEmail: string | null;
   pendingVerificationEmail: string | null;
@@ -159,174 +176,198 @@ interface StockContextType {
 
 const StockContext = createContext<StockContextType | undefined>(undefined);
 
+const DEFAULT_THEME_COLOR = '#3b82f6';
+const DEFAULT_LOGO_PATH = '/logos/ic_stock_logo.png';
+
 export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  // Auth state synchronized with authService
+  const [authSnapshot, setAuthSnapshot] = useState<AuthStateSnapshot>(() => authService.getSnapshot());
+  const isAuthedRef = useRef<boolean>(authSnapshot.isAuthed);
+  isAuthedRef.current = authSnapshot.isAuthed;
+
   const loadLocal = <T,>(key: string, fallback: T): T => {
     try {
       const stored = localStorage.getItem(`hardware_${key}`);
       return stored ? JSON.parse(stored) : fallback;
-    } catch {
+    } catch (e) {
+      console.warn(`Failed to read ${key} from localStorage`, e);
       return fallback;
     }
   };
 
-  const saveLocal = (key: string, data: any) => {
+  const saveLocal = useCallback((key: string, data: any) => {
+    if (!isAuthedRef.current) return;
     try {
       localStorage.setItem(`hardware_${key}`, JSON.stringify(data));
     } catch (e) {
       console.error(`Failed to save ${key} to localStorage`, e);
     }
-  };
+  }, []);
 
-  // State
-  const [items, setItems] = useState<Item[]>(() => loadLocal('items', []));
-  const [transactions, setTransactions] = useState<TransactionRecord[]>(() =>
-    loadLocal('transactions', [])
-  );
-  const [quotations, setQuotations] = useState<QuotationRecord[]>(() => {
-    const list = loadLocal<any[]>('quotations', []);
-    if (!Array.isArray(list)) return [];
-    return list.map((q) => ({
-      id: String(q.id || ''),
-      quotationNo: String(q.quotationNo || q.quotation_no || `EST-${String(q.id || '').slice(0, 4).toUpperCase()}`),
-      customerName: String(q.customerName || q.customer_name || 'Walk-in Customer'),
-      customerPhone: String(q.customerPhone || q.customer_phone || ''),
-      customerAddress: String(q.customerAddress || q.customer_address || ''),
-      date: String(q.date || (q.createdAt ? String(q.createdAt).split('T')[0] : '') || ''),
-      validUntil: String(q.validUntil || q.valid_until || ''),
-      items: Array.isArray(q.items) ? q.items : [],
-      subtotal: Number(q.subtotal || 0),
-      discount: Number(q.discount || 0),
-      taxPercent: Number(q.taxPercent ?? q.tax_percent ?? 0),
-      taxAmount: Number(q.taxAmount ?? q.tax_amount ?? 0),
-      grandTotal: Number(q.grandTotal ?? q.grand_total ?? q.finalAmount ?? 0),
-      status: (['Draft', 'Sent', 'Accepted', 'Converted'].includes(q.status) ? q.status : 'Draft') as QuotationRecord['status'],
-      notes: String(q.notes || ''),
-      createdAt: String(q.createdAt || q.created_at || new Date().toISOString())
-    }));
-  });
-  const [ledgerAccounts, setLedgerAccounts] = useState<LedgerAccount[]>(() => {
-    const list = loadLocal<any[]>('ledger_accounts', []);
-    if (!Array.isArray(list)) return [];
-    const mockIds = new Set(['acc_1', 'acc_2', 'acc_3', 'acc_4']);
-    return list
-      .filter((a) => a && a.id && !mockIds.has(a.id))
-      .map((a) => ({
-        id: String(a.id),
-        name: String(a.name || ''),
-        phone: String(a.phone || ''),
-        address: String(a.address || ''),
-        type: (String(a.type || 'CUSTOMER').toUpperCase() === 'SUPPLIER' ? 'SUPPLIER' : 'CUSTOMER') as LedgerAccount['type'],
-        netBalance: Number(a.netBalance ?? a.net_balance ?? 0),
-        creditLimit: Number(a.creditLimit ?? a.credit_limit ?? 0),
-        notes: String(a.notes || ''),
-        createdAt: String(a.createdAt || a.created_at || new Date().toISOString()),
-        updatedAt: String(a.updatedAt || a.updated_at || new Date().toISOString())
-      }));
-  });
-  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>(() => {
-    const list = loadLocal<any[]>('ledger_entries', []);
-    if (!Array.isArray(list)) return [];
-    const mockIds = new Set(['entry_1', 'entry_2', 'entry_3', 'entry_4']);
-    return list
-      .filter((e) => e && e.id && !mockIds.has(e.id))
-      .map((e) => ({
-        id: String(e.id),
-        accountId: String(e.accountId || e.account_id || ''),
-        type: (String(e.type || e.entryType || e.entry_type || 'GAVE').toUpperCase() === 'GOT' ? 'GOT' : 'GAVE') as 'GAVE' | 'GOT',
-        amount: Number(e.amount || 0),
-        balanceAfter: Number(e.balanceAfter ?? e.balance_after ?? 0),
-        date: String(e.date || (e.createdAt ? String(e.createdAt).split('T')[0] : '') || ''),
-        description: String(e.description ?? e.note ?? ''),
-        billRef: String(e.billRef || e.bill_ref || ''),
-        createdAt: String(e.createdAt || e.created_at || new Date().toISOString())
-      }));
-  });
-  const [dailyCashflows, setDailyCashflows] = useState<DailyCashflowRecord[]>(() => {
-    const list = loadLocal<DailyCashflowRecord[]>('daily_cashflows', []);
+  // State (unpopulated until authenticated session is verified)
+  const [items, setItems] = useState<Item[]>([]);
+  const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
+  const [quotations, setQuotations] = useState<QuotationRecord[]>([]);
+  const [ledgerAccounts, setLedgerAccounts] = useState<LedgerAccount[]>([]);
+  const [ledgerEntries, setLedgerEntries] = useState<LedgerEntry[]>([]);
+  const [dailyCashflows, setDailyCashflows] = useState<DailyCashflowRecord[]>([]);
+  const [shopProfile, setShopProfile] = useState<ShopProfile>(initialShopProfile);
+  const [uiConfig, setUiConfig] = useState<DynamicUiConfig>(initialUiConfig);
+  const [selectedLogo, setSelectedLogo] = useState<string>(DEFAULT_LOGO_PATH);
+  const [bannerUrl, setBannerUrl] = useState<string | null>(null);
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
 
-    // Strip old mock records if any exist in local storage
-    return list.filter(
-      (c) =>
-        !c.id.startsWith('cf_1') &&
-        !c.id.startsWith('cf_2') &&
-        !c.id.startsWith('cf_3') &&
-        !c.id.startsWith('cf_4') &&
-        !c.id.startsWith('cf_5') &&
-        !c.id.startsWith('cf_6') &&
-        !c.id.startsWith('cf_7')
-    );
-  });
-  const [shopProfile, setShopProfile] = useState<ShopProfile>(() =>
-    loadLocal('shop_profile', initialShopProfile)
+  const itemsRef = useRef<Item[]>(items);
+  itemsRef.current = items;
+  const ledgerAccountsRef = useRef<LedgerAccount[]>(ledgerAccounts);
+  ledgerAccountsRef.current = ledgerAccounts;
+  const ledgerEntriesRef = useRef<LedgerEntry[]>(ledgerEntries);
+  ledgerEntriesRef.current = ledgerEntries;
+  const quotationsRef = useRef<QuotationRecord[]>(quotations);
+  quotationsRef.current = quotations;
+
+  // Persistent failed-sync retry queue
+  const retryQueueRef = useRef<RetryTask[]>([]);
+  const isFlushingQueueRef = useRef<boolean>(false);
+
+  const persistRetryQueue = useCallback(
+    (nextQueue: RetryTask[]) => {
+      retryQueueRef.current = nextQueue;
+      if (isAuthedRef.current) {
+        saveLocal('sync_retry_queue', nextQueue);
+      }
+    },
+    [saveLocal]
   );
-  const [uiConfig, setUiConfig] = useState<DynamicUiConfig>(() =>
-    loadLocal('ui_config', initialUiConfig)
+
+  const enqueueRetry = useCallback(
+    (kind: RetryTask['kind'], payload: any) => {
+      const task = { id: newId('retry'), kind, payload } as RetryTask;
+      persistRetryQueue([...retryQueueRef.current, task]);
+    },
+    [persistRetryQueue]
   );
-  const [selectedLogo, setSelectedLogo] = useState<string>(() =>
-    loadLocal('selected_logo', '/logos/ic_stock_logo.png')
-  );
-  const [bannerUrl, setBannerUrl] = useState<string | null>(() =>
-    loadLocal('store_custom_banner', null)
-  );
-  const [logoUrl, setLogoUrl] = useState<string | null>(() =>
-    loadLocal('store_custom_logo', null)
-  );
-  const bannerUrlRef = useRef<string | null>(bannerUrl);
-  bannerUrlRef.current = bannerUrl;
-  const logoUrlRef = useRef<string | null>(logoUrl);
-  logoUrlRef.current = logoUrl;
 
   // Supabase sync status
-  const [supabaseStatus, setSupabaseStatus] = useState<'connected' | 'connecting' | 'offline'>('connecting');
+  const [supabaseStatus, setSupabaseStatus] = useState<'connected' | 'connecting' | 'offline'>('offline');
   const [isRealtimeLive, setIsRealtimeLive] = useState(false);
 
-  // Auth state synchronized with authService
-  const [authSnapshot, setAuthSnapshot] = useState<AuthStateSnapshot>(() => authService.getSnapshot());
-  const [themeColor, setThemeColorState] = useState<string>(() => loadLocal('theme_color', '#3b82f6'));
+  const [themeColor, setThemeColorState] = useState<string>(DEFAULT_THEME_COLOR);
   const [festivalStudioConfig, setFestivalStudioConfig] = useState<FestivalStudioConfig>(() =>
-    festivalPreferenceStore.load()
+    createDefaultFestivalStudioConfig()
   );
   const festivalStudioRef = useRef<FestivalStudioConfig>(festivalStudioConfig);
   festivalStudioRef.current = festivalStudioConfig;
   const [isAnnouncementDismissed, setIsAnnouncementDismissed] = useState<boolean>(false);
   const [announcementTick, setAnnouncementTick] = useState<number>(() => Date.now());
 
-  const [tintLogs, setTintLogs] = useState<ColorTintLog[]>(() =>
-    loadLocal<ColorTintLog[]>('tint_logs', [])
-  );
-  const [processedTintIds, setProcessedTintIds] = useState<string[]>(() =>
-    loadLocal<string[]>('processed_tint_ids', [])
-  );
+  const [tintLogs, setTintLogs] = useState<ColorTintLog[]>([]);
+  const [processedTintIds, setProcessedTintIds] = useState<string[]>([]);
+
+  const hydrateLocalCacheForSession = useCallback(() => {
+    const cachedItems = loadLocal<Item[]>('items', []);
+    if (Array.isArray(cachedItems) && cachedItems.length > 0) setItems(cachedItems);
+
+    const cachedTx = loadLocal<TransactionRecord[]>('transactions', []);
+    if (Array.isArray(cachedTx) && cachedTx.length > 0) setTransactions(cachedTx);
+
+    const cachedQuotes = loadLocal<QuotationRecord[]>('quotations', []);
+    if (Array.isArray(cachedQuotes) && cachedQuotes.length > 0) setQuotations(cachedQuotes);
+
+    const cachedAcc = loadLocal<LedgerAccount[]>('ledger_accounts', []);
+    if (Array.isArray(cachedAcc) && cachedAcc.length > 0) setLedgerAccounts(cachedAcc);
+
+    const cachedEnt = loadLocal<LedgerEntry[]>('ledger_entries', []);
+    if (Array.isArray(cachedEnt) && cachedEnt.length > 0) setLedgerEntries(cachedEnt);
+
+    const cachedCf = loadLocal<DailyCashflowRecord[]>('daily_cashflows', []);
+    if (Array.isArray(cachedCf) && cachedCf.length > 0) setDailyCashflows(cachedCf);
+
+    setShopProfile(loadLocal('shop_profile', initialShopProfile));
+    setUiConfig(loadLocal('ui_config', initialUiConfig));
+    setSelectedLogo(loadLocal('selected_logo', DEFAULT_LOGO_PATH));
+    setBannerUrl(loadLocal('store_custom_banner', null));
+    setLogoUrl(loadLocal('store_custom_logo', null));
+    setThemeColorState(loadLocal('theme_color', DEFAULT_THEME_COLOR));
+    setFestivalStudioConfig(festivalPreferenceStore.load());
+    setTintLogs(loadLocal<ColorTintLog[]>('tint_logs', []));
+    setProcessedTintIds(loadLocal<string[]>('processed_tint_ids', []));
+
+    const cachedQueue = loadLocal<RetryTask[]>('sync_retry_queue', []);
+    retryQueueRef.current = Array.isArray(cachedQueue) ? cachedQueue : [];
+  }, []);
+
+  const resetAllInMemoryState = useCallback(() => {
+    supabaseService.disconnectRealtime();
+    setItems([]);
+    setTransactions([]);
+    setQuotations([]);
+    setLedgerAccounts([]);
+    setLedgerEntries([]);
+    setDailyCashflows([]);
+    setShopProfile(initialShopProfile);
+    setUiConfig(initialUiConfig);
+    setSelectedLogo(DEFAULT_LOGO_PATH);
+    setBannerUrl(null);
+    setLogoUrl(null);
+    setThemeColorState(DEFAULT_THEME_COLOR);
+    setFestivalStudioConfig(createDefaultFestivalStudioConfig());
+    setIsAnnouncementDismissed(false);
+    setTintLogs([]);
+    setProcessedTintIds([]);
+    retryQueueRef.current = [];
+    setIsRealtimeLive(false);
+    setSupabaseStatus('offline');
+  }, []);
 
   useEffect(() => {
-    saveLocal('tint_logs', tintLogs);
-  }, [tintLogs]);
+    if (authSnapshot.isAuthed) saveLocal('tint_logs', tintLogs);
+  }, [tintLogs, authSnapshot.isAuthed, saveLocal]);
 
   useEffect(() => {
-    saveLocal('processed_tint_ids', processedTintIds);
-  }, [processedTintIds]);
+    if (authSnapshot.isAuthed) saveLocal('processed_tint_ids', processedTintIds);
+  }, [processedTintIds, authSnapshot.isAuthed, saveLocal]);
 
   const setThemeColor = (color: string) => {
     setThemeColorState(color);
     saveLocal('theme_color', color);
   };
 
-  // Wire authService token provider + role persistence listener
+  // Wire authService handlers, session refresh WS reconnect, and logout memory reset
   useEffect(() => {
-    supabaseService.setAccessTokenProvider(() => authService.activeAccessToken());
+    supabaseService.setAuthHandlers({
+      getAccessToken: () => authService.activeAccessToken(),
+      refreshSession: () => authService.refreshSession(),
+      onAuthExpired: (reason?: string) => authService.forceSessionExpiredSignOut(reason)
+    });
+
     const unsub = authService.subscribe((snap) => {
       setAuthSnapshot(snap);
     });
+
     authService.onRolesChangedListener = (rolesJson: string, updatedAt: number) => {
+      if (!authService.getSnapshot().isAuthed) return;
       supabaseService.saveStoreProfile({ userRolesJson: rolesJson, updatedAt }).catch((err) => {
         console.warn('Role sync to store profile skipped:', err);
+        enqueueRetry('saveStoreProfile', { userRolesJson: rolesJson, updatedAt });
       });
     };
+
+    authService.onTokenRefreshedListener = () => {
+      supabaseService.reconnectRealtimeIfNeeded();
+    };
+
+    authService.onSignedOutListener = () => {
+      resetAllInMemoryState();
+    };
+
     return () => {
       unsub();
       authService.onRolesChangedListener = null;
+      authService.onTokenRefreshedListener = null;
+      authService.onSignedOutListener = null;
     };
-  }, []);
+  }, [enqueueRetry, resetAllInMemoryState]);
 
   // Derive active festivals, live announcement (with auto start/end wakeup), and effective theme color
   const activeFestivals = useMemo(
@@ -397,156 +438,285 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }, 3200);
   }, []);
 
-  const applyRemoteStoreProfile = useCallback((remoteStoreProfile: RemoteStoreProfile) => {
-    if (remoteStoreProfile.bannerUrl !== undefined) {
-      const cleanBanner =
-        remoteStoreProfile.bannerUrl && remoteStoreProfile.bannerUrl.trim() !== ''
-          ? remoteStoreProfile.bannerUrl.trim()
-          : null;
-      setBannerUrl(cleanBanner);
-      saveLocal('store_custom_banner', cleanBanner);
-    }
-    if (remoteStoreProfile.logoUrl !== undefined) {
-      const cleanLogo =
-        remoteStoreProfile.logoUrl && remoteStoreProfile.logoUrl.trim() !== ''
-          ? remoteStoreProfile.logoUrl.trim()
-          : null;
-      setLogoUrl(cleanLogo);
-      saveLocal('store_custom_logo', cleanLogo);
-      if (cleanLogo) {
-        setShopProfile((prev) => ({ ...prev, logo: cleanLogo }));
-      }
-    }
-    if (remoteStoreProfile.storeName && remoteStoreProfile.storeName.trim()) {
-      const nextName = remoteStoreProfile.storeName.trim();
-      setShopProfile((prev) => ({ ...prev, name: nextName }));
-      setUiConfig((prev) => ({
-        ...prev,
-        theme: { ...prev.theme, storeTitle: nextName }
-      }));
-    }
-    if (remoteStoreProfile.location && remoteStoreProfile.location.trim()) {
-      const nextLoc = remoteStoreProfile.location.trim();
-      setShopProfile((prev) => ({ ...prev, address: nextLoc }));
-    }
-    if (remoteStoreProfile.upiId && remoteStoreProfile.upiId.trim()) {
-      const nextUpi = remoteStoreProfile.upiId.trim();
-      setShopProfile((prev) => ({ ...prev, upiId: nextUpi }));
-    }
-    if (remoteStoreProfile.festivalConfigJson) {
-      const updatedStudio = festivalPreferenceStore.applyRemoteJson(
-        remoteStoreProfile.festivalConfigJson,
-        festivalStudioRef.current
-      );
-      if (updatedStudio) {
-        setFestivalStudioConfig(updatedStudio);
-        setAnnouncementTick(Date.now());
-      }
-    }
-    if (remoteStoreProfile.userRolesJson) {
-      authService.applyRemoteUserRoles(
-        remoteStoreProfile.userRolesJson,
-        remoteStoreProfile.updatedAt
-      );
-    }
-  }, []);
+  const flushRetryQueue = useCallback(async () => {
+    if (!isAuthedRef.current || isFlushingQueueRef.current) return;
+    if (retryQueueRef.current.length === 0) return;
 
-  // Sync to local storage
-  useEffect(() => saveLocal('items', items), [items]);
-  useEffect(() => saveLocal('transactions', transactions), [transactions]);
-  useEffect(() => saveLocal('quotations', quotations), [quotations]);
-  useEffect(() => saveLocal('ledger_accounts', ledgerAccounts), [ledgerAccounts]);
-  useEffect(() => saveLocal('ledger_entries', ledgerEntries), [ledgerEntries]);
-  useEffect(() => saveLocal('daily_cashflows', dailyCashflows), [dailyCashflows]);
-  useEffect(() => saveLocal('shop_profile', shopProfile), [shopProfile]);
-  useEffect(() => saveLocal('ui_config', uiConfig), [uiConfig]);
-  useEffect(() => saveLocal('selected_logo', selectedLogo), [selectedLogo]);
-  useEffect(() => saveLocal('store_custom_banner', bannerUrl), [bannerUrl]);
-  useEffect(() => saveLocal('store_custom_logo', logoUrl), [logoUrl]);
-
-  // Initial fetch from live Supabase DB
-  const refreshFromSupabase = useCallback(async (isSilent = false) => {
-    if (!isSilent) setSupabaseStatus('connecting');
+    isFlushingQueueRef.current = true;
     try {
-      const [
-        itemsResult,
-        txResult,
-        cashflowsResult,
-        quotesResult,
-        ledgerAccResult,
-        ledgerEntriesResult,
-        storeProfileResult
-      ] = await Promise.allSettled([
-        supabaseService.fetchAllItems(),
-        supabaseService.fetchTransactions(),
-        supabaseService.fetchDailyCashflows(),
-        supabaseService.fetchQuotations(),
-        supabaseService.fetchLedgerAccounts(),
-        supabaseService.fetchLedgerEntries(),
-        supabaseService.fetchStoreProfile()
-      ]);
+      const queue = [...retryQueueRef.current];
+      const remaining: RetryTask[] = [];
+      let succeededCount = 0;
 
-      let anySuccess = false;
+      for (let i = 0; i < queue.length; i++) {
+        if (!isAuthedRef.current) break;
+        const task = queue[i];
+        try {
+          switch (task.kind) {
+            case 'upsertItem':
+              await supabaseService.upsertItem(task.payload);
+              break;
+            case 'updateItemMeta':
+              await supabaseService.updateItemMetadata(task.payload.id, task.payload.patch);
+              break;
+            case 'adjustStock': {
+              const serverQty = await supabaseService.adjustItemQty(
+                task.payload.itemId,
+                task.payload.delta
+              );
+              setItems((prev) =>
+                prev.map((it) =>
+                  it.id === task.payload.itemId
+                    ? { ...it, qty: serverQty, updatedAt: new Date().toISOString() }
+                    : it
+                )
+              );
+              break;
+            }
+            case 'deleteItem':
+              await supabaseService.deleteItem(task.payload.id);
+              break;
+            case 'insertTransaction':
+              await supabaseService.insertTransaction(task.payload);
+              break;
+            case 'upsertCashflow':
+              await supabaseService.upsertCashflow(task.payload);
+              break;
+            case 'deleteCashflow':
+              await supabaseService.deleteCashflowRecord(task.payload.id);
+              break;
+            case 'upsertQuotation':
+              await supabaseService.upsertQuotation(task.payload);
+              break;
+            case 'deleteQuotation':
+              await supabaseService.deleteQuotation(task.payload.id);
+              break;
+            case 'upsertLedgerAccount':
+              await supabaseService.upsertLedgerAccount(task.payload);
+              break;
+            case 'deleteLedgerAccount':
+              await supabaseService.deleteLedgerAccount(task.payload.id);
+              break;
+            case 'insertLedgerEntry':
+              await supabaseService.insertLedgerEntry(task.payload);
+              break;
+            case 'deleteLedgerEntry':
+              await supabaseService.deleteLedgerEntry(task.payload.id);
+              break;
+            case 'insertPurchase':
+              await supabaseService.insertPurchaseRecord(task.payload);
+              break;
+            case 'saveStoreProfile':
+              await supabaseService.saveStoreProfile(task.payload);
+              break;
+          }
+          succeededCount++;
+        } catch (err) {
+          console.warn('Queued sync task failed, retaining for next retry:', task.kind, err);
+          remaining.push(task, ...queue.slice(i + 1));
+          break;
+        }
+      }
 
-      if (itemsResult.status === 'fulfilled' && itemsResult.value) {
-        const remoteItems = itemsResult.value;
-        if (remoteItems.length > 0) {
+      if (isAuthedRef.current) {
+        persistRetryQueue(remaining);
+        if (succeededCount > 0 && remaining.length === 0) {
+          showToast(`Synced ${succeededCount} pending cloud update(s)`);
+        }
+      }
+    } finally {
+      isFlushingQueueRef.current = false;
+    }
+  }, [persistRetryQueue, showToast]);
+
+  const applyRemoteStoreProfile = useCallback(
+    (remoteStoreProfile: RemoteStoreProfile) => {
+      if (!isAuthedRef.current) return;
+      if (remoteStoreProfile.bannerUrl !== undefined) {
+        const cleanBanner =
+          remoteStoreProfile.bannerUrl && remoteStoreProfile.bannerUrl.trim() !== ''
+            ? remoteStoreProfile.bannerUrl.trim()
+            : null;
+        setBannerUrl(cleanBanner);
+        saveLocal('store_custom_banner', cleanBanner);
+      }
+      if (remoteStoreProfile.logoUrl !== undefined) {
+        const cleanLogo =
+          remoteStoreProfile.logoUrl && remoteStoreProfile.logoUrl.trim() !== ''
+            ? remoteStoreProfile.logoUrl.trim()
+            : null;
+        setLogoUrl(cleanLogo);
+        saveLocal('store_custom_logo', cleanLogo);
+        if (cleanLogo) {
+          setShopProfile((prev) => ({ ...prev, logo: cleanLogo }));
+        }
+      }
+      if (remoteStoreProfile.storeName && remoteStoreProfile.storeName.trim()) {
+        const nextName = remoteStoreProfile.storeName.trim();
+        setShopProfile((prev) => ({ ...prev, name: nextName }));
+        setUiConfig((prev) => ({
+          ...prev,
+          theme: { ...prev.theme, storeTitle: nextName }
+        }));
+      }
+      if (remoteStoreProfile.location && remoteStoreProfile.location.trim()) {
+        const nextLoc = remoteStoreProfile.location.trim();
+        setShopProfile((prev) => ({ ...prev, address: nextLoc }));
+      }
+      if (remoteStoreProfile.upiId && remoteStoreProfile.upiId.trim()) {
+        const nextUpi = remoteStoreProfile.upiId.trim();
+        setShopProfile((prev) => ({ ...prev, upiId: nextUpi }));
+      }
+      if (remoteStoreProfile.festivalConfigJson) {
+        const updatedStudio = festivalPreferenceStore.applyRemoteJson(
+          remoteStoreProfile.festivalConfigJson,
+          festivalStudioRef.current
+        );
+        if (updatedStudio) {
+          setFestivalStudioConfig(updatedStudio);
+          setAnnouncementTick(Date.now());
+        }
+      }
+      if (remoteStoreProfile.userRolesJson) {
+        authService.applyRemoteUserRoles(
+          remoteStoreProfile.userRolesJson,
+          remoteStoreProfile.updatedAt
+        );
+      }
+    },
+    [saveLocal]
+  );
+
+  // Sync to local storage ONLY while authenticated
+  useEffect(() => {
+    if (authSnapshot.isAuthed) saveLocal('items', items);
+  }, [items, authSnapshot.isAuthed, saveLocal]);
+  useEffect(() => {
+    if (authSnapshot.isAuthed) saveLocal('transactions', transactions);
+  }, [transactions, authSnapshot.isAuthed, saveLocal]);
+  useEffect(() => {
+    if (authSnapshot.isAuthed) saveLocal('quotations', quotations);
+  }, [quotations, authSnapshot.isAuthed, saveLocal]);
+  useEffect(() => {
+    if (authSnapshot.isAuthed) saveLocal('ledger_accounts', ledgerAccounts);
+  }, [ledgerAccounts, authSnapshot.isAuthed, saveLocal]);
+  useEffect(() => {
+    if (authSnapshot.isAuthed) saveLocal('ledger_entries', ledgerEntries);
+  }, [ledgerEntries, authSnapshot.isAuthed, saveLocal]);
+  useEffect(() => {
+    if (authSnapshot.isAuthed) saveLocal('daily_cashflows', dailyCashflows);
+  }, [dailyCashflows, authSnapshot.isAuthed, saveLocal]);
+  useEffect(() => {
+    if (authSnapshot.isAuthed) saveLocal('shop_profile', shopProfile);
+  }, [shopProfile, authSnapshot.isAuthed, saveLocal]);
+  useEffect(() => {
+    if (authSnapshot.isAuthed) saveLocal('ui_config', uiConfig);
+  }, [uiConfig, authSnapshot.isAuthed, saveLocal]);
+  useEffect(() => {
+    if (authSnapshot.isAuthed) saveLocal('selected_logo', selectedLogo);
+  }, [selectedLogo, authSnapshot.isAuthed, saveLocal]);
+  useEffect(() => {
+    if (authSnapshot.isAuthed) saveLocal('store_custom_banner', bannerUrl);
+  }, [bannerUrl, authSnapshot.isAuthed, saveLocal]);
+  useEffect(() => {
+    if (authSnapshot.isAuthed) saveLocal('store_custom_logo', logoUrl);
+  }, [logoUrl, authSnapshot.isAuthed, saveLocal]);
+
+  // Fetch from live Supabase DB (strictly requires verified user session)
+  const refreshFromSupabase = useCallback(
+    async (isSilent = false) => {
+      if (!authService.getSnapshot().isAuthed) {
+        setSupabaseStatus('offline');
+        return;
+      }
+
+      if (!isSilent) setSupabaseStatus('connecting');
+      await flushRetryQueue();
+
+      try {
+        const [
+          itemsResult,
+          txResult,
+          cashflowsResult,
+          quotesResult,
+          ledgerAccResult,
+          ledgerEntriesResult,
+          storeProfileResult
+        ] = await Promise.allSettled([
+          supabaseService.fetchAllItems(),
+          supabaseService.fetchTransactions(),
+          supabaseService.fetchDailyCashflows(),
+          supabaseService.fetchQuotations(),
+          supabaseService.fetchLedgerAccounts(),
+          supabaseService.fetchLedgerEntries(),
+          supabaseService.fetchStoreProfile()
+        ]);
+
+        if (!isAuthedRef.current) return;
+
+        let anySuccess = false;
+
+        if (itemsResult.status === 'fulfilled' && itemsResult.value) {
+          const remoteItems = itemsResult.value;
           setItems(remoteItems);
           if (!isSilent) {
             showToast(`Synced ${remoteItems.length} items from Supabase database!`);
           }
+          anySuccess = true;
         }
-        anySuccess = true;
-      }
 
-      if (txResult.status === 'fulfilled' && txResult.value && txResult.value.length > 0) {
-        setTransactions(txResult.value);
-        anySuccess = true;
-      }
+        if (txResult.status === 'fulfilled' && txResult.value) {
+          setTransactions(txResult.value);
+          anySuccess = true;
+        }
 
-      if (cashflowsResult.status === 'fulfilled' && cashflowsResult.value && cashflowsResult.value.length > 0) {
-        setDailyCashflows(cashflowsResult.value);
-        anySuccess = true;
-      }
+        if (cashflowsResult.status === 'fulfilled' && cashflowsResult.value) {
+          setDailyCashflows(cashflowsResult.value);
+          anySuccess = true;
+        }
 
-      if (quotesResult.status === 'fulfilled' && quotesResult.value && quotesResult.value.length > 0) {
-        setQuotations(quotesResult.value);
-        anySuccess = true;
-      }
+        if (quotesResult.status === 'fulfilled' && quotesResult.value) {
+          setQuotations(quotesResult.value);
+          anySuccess = true;
+        }
 
-      if (ledgerAccResult.status === 'fulfilled' && ledgerAccResult.value && ledgerAccResult.value.length > 0) {
-        setLedgerAccounts(ledgerAccResult.value);
-        anySuccess = true;
-      }
+        if (ledgerAccResult.status === 'fulfilled' && ledgerAccResult.value) {
+          setLedgerAccounts(ledgerAccResult.value);
+          anySuccess = true;
+        }
 
-      if (ledgerEntriesResult.status === 'fulfilled' && ledgerEntriesResult.value && ledgerEntriesResult.value.length > 0) {
-        setLedgerEntries(ledgerEntriesResult.value);
-        anySuccess = true;
-      }
+        if (ledgerEntriesResult.status === 'fulfilled' && ledgerEntriesResult.value) {
+          setLedgerEntries(ledgerEntriesResult.value);
+          anySuccess = true;
+        }
 
-      if (storeProfileResult.status === 'fulfilled' && storeProfileResult.value) {
-        applyRemoteStoreProfile(storeProfileResult.value);
-        anySuccess = true;
-      }
+        if (storeProfileResult.status === 'fulfilled' && storeProfileResult.value) {
+          applyRemoteStoreProfile(storeProfileResult.value);
+          anySuccess = true;
+        }
 
-      if (anySuccess) {
-        setSupabaseStatus('connected');
-      } else {
+        setSupabaseStatus(anySuccess ? 'connected' : 'offline');
+      } catch (e) {
+        console.warn('Could not sync with Supabase, using local cache', e);
         setSupabaseStatus('offline');
       }
-    } catch (e) {
-      console.warn('Could not sync with Supabase, using local cache', e);
-      setSupabaseStatus('offline');
-    }
-  }, [showToast, applyRemoteStoreProfile]);
+    },
+    [showToast, applyRemoteStoreProfile, flushRetryQueue]
+  );
 
+  // Connect & sync ONLY when authenticated
   useEffect(() => {
-    refreshFromSupabase(true);
-    if (authService.getSnapshot().isAuthed) {
-      authService.refreshCurrentUserRole().catch(() => {});
+    if (!authSnapshot.isAuthed) {
+      supabaseService.disconnectRealtime();
+      return;
     }
 
-    // Connect realtime WebSocket
+    hydrateLocalCacheForSession();
+    void refreshFromSupabase(true);
+    authService.refreshCurrentUserRole().catch((e) => {
+      console.warn('Background role check notice:', e);
+    });
+
     supabaseService.connectRealtime({
       onStoreProfileChanged: (profile: RemoteStoreProfile) => {
         setIsRealtimeLive(true);
@@ -576,7 +746,12 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
                   qty: record.qty !== undefined ? Number(record.qty) : existing.qty,
                   low: record.low !== undefined ? Number(record.low) : existing.low,
                   unit: record.unit !== undefined ? record.unit : existing.unit,
-                  imageUrl: record.image_url !== undefined ? (record.image_url ? String(record.image_url) : null) : existing.imageUrl,
+                  imageUrl:
+                    record.image_url !== undefined
+                      ? record.image_url
+                        ? String(record.image_url)
+                        : null
+                      : existing.imageUrl,
                   updatedAt: record.updated_at || new Date().toISOString()
                 };
                 return updated;
@@ -775,35 +950,36 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     });
 
-    // Auto-sync when user returns to this tab / unlocks phone
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
-        refreshFromSupabase(true);
+        void refreshFromSupabase(true);
       }
+    };
+    const handleOnline = () => {
+      void flushRetryQueue();
     };
     window.addEventListener('visibilitychange', handleVisibilityOrFocus);
     window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('online', handleOnline);
 
-    // Periodic background sync every 25 seconds to guarantee cross-device consistency
     const pollInterval = setInterval(() => {
-      refreshFromSupabase(true);
+      void refreshFromSupabase(true);
     }, 25000);
 
     return () => {
       window.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       window.removeEventListener('focus', handleVisibilityOrFocus);
+      window.removeEventListener('online', handleOnline);
       clearInterval(pollInterval);
       supabaseService.disconnectRealtime();
     };
-  }, [refreshFromSupabase, applyRemoteStoreProfile]);
-
-  // Refresh data & verify role whenever auth state turns true
-  useEffect(() => {
-    if (authSnapshot.isAuthed) {
-      refreshFromSupabase(true);
-      authService.refreshCurrentUserRole().catch(() => {});
-    }
-  }, [authSnapshot.isAuthed, refreshFromSupabase]);
+  }, [
+    authSnapshot.isAuthed,
+    hydrateLocalCacheForSession,
+    refreshFromSupabase,
+    applyRemoteStoreProfile,
+    flushRetryQueue
+  ]);
 
   // Auth & Role actions
   const signInEmailPassword = useCallback(
@@ -922,43 +1098,55 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setAnnouncementTick(Date.now());
       setIsAnnouncementDismissed(false);
 
-      const syncOk = await supabaseService.saveStoreProfile({
-        festivalConfigJson: json,
-        updatedAt: normalized.updatedAt
-      });
+      let syncOk = false;
+      try {
+        syncOk = await supabaseService.saveStoreProfile({
+          festivalConfigJson: json,
+          updatedAt: normalized.updatedAt
+        });
+      } catch (err) {
+        console.error('Failed syncing Announcement Studio:', err);
+        enqueueRetry('saveStoreProfile', {
+          festivalConfigJson: json,
+          updatedAt: normalized.updatedAt
+        });
+      }
 
       if (uploadSucceeded && syncOk) {
         showToast('Announcement Studio saved & synced across devices!');
       } else if (syncOk) {
-        showToast('Saved Announcement Studio settings. Custom image upload had an issue.');
+        showToast('Saved Announcement Studio settings. Image upload failed, please retry.');
       } else {
-        showToast('Saved locally. Cloud sync will retry when online.');
+        showToast('Cloud sync failed — saved locally and queued for retry.');
       }
       return uploadSucceeded && syncOk;
     },
-    [showToast]
+    [showToast, enqueueRetry]
   );
 
-  // Item management with Supabase sync
+  // Item management with strict HTTP error checking + atomic stock RPC
   const addItem = async (itemData: Omit<Item, 'id' | 'updatedAt'>): Promise<Item> => {
+    const now = new Date().toISOString();
     const newItem: Item = {
       ...itemData,
-      id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      updatedAt: new Date().toISOString()
+      id: newId('item'),
+      updatedAt: now
     };
     setItems((prev) => [newItem, ...prev]);
 
+    let itemSyncOk = true;
     try {
       await supabaseService.upsertItem(newItem);
     } catch (err: any) {
+      itemSyncOk = false;
       console.error('Supabase addItem error:', err);
-      showToast(`Warning: Remote sync error: ${err?.message || 'DB error'}`);
+      enqueueRetry('upsertItem', newItem);
+      showToast(`Could not sync "${newItem.name}" to cloud — queued for retry`);
     }
 
-    // Record initial stock transaction if initial qty > 0
     if (newItem.qty > 0) {
       const tx: TransactionRecord = {
-        clientId: `tx_${Date.now()}`,
+        clientId: newId('tx'),
         itemId: newItem.id,
         itemName: newItem.name,
         action: 'in',
@@ -966,44 +1154,136 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         balance: newItem.qty,
         note: 'Opening stock added',
         unit: newItem.unit,
-        createdAt: new Date().toISOString()
+        createdAt: now
       };
       setTransactions((prev) => [tx, ...prev]);
-      supabaseService.insertTransaction(tx).catch((err) => console.error(err));
+      try {
+        await supabaseService.insertTransaction(tx);
+      } catch (err) {
+        itemSyncOk = false;
+        console.error('Failed syncing opening stock transaction:', err);
+        enqueueRetry('insertTransaction', tx);
+      }
     }
 
-    showToast(`Added: ${newItem.name}`);
+    if (itemSyncOk) {
+      showToast(`Added: ${newItem.name}`);
+    }
     return newItem;
   };
 
   const updateItem = async (updated: Item): Promise<void> => {
-    const withTimestamp = { ...updated, updatedAt: new Date().toISOString() };
+    const prevItem = itemsRef.current.find((i) => i.id === updated.id);
+    const now = new Date().toISOString();
+    const withTimestamp = { ...updated, updatedAt: now };
+
     setItems((prev) =>
       prev.map((item) => (item.id === updated.id ? withTimestamp : item))
     );
+
+    const qtyDelta = prevItem
+      ? Math.round((Number(updated.qty) - Number(prevItem.qty)) * 100) / 100
+      : 0;
+
     try {
-      await supabaseService.upsertItem(withTimestamp);
+      if (prevItem) {
+        await supabaseService.updateItemMetadata(updated.id, {
+          name: withTimestamp.name,
+          code: withTimestamp.code || '',
+          barcode: withTimestamp.barcode || '',
+          type: withTimestamp.type || 'General Hardware',
+          brand: withTimestamp.brand || '',
+          size: withTimestamp.size || '',
+          unit: withTimestamp.unit || 'pcs',
+          low: withTimestamp.low,
+          cost: withTimestamp.cost,
+          price: withTimestamp.price,
+          mrp: withTimestamp.mrp || null,
+          image_url: withTimestamp.imageUrl || null,
+          aliases: withTimestamp.aliases || '',
+          updated_at: now
+        });
+
+        if (qtyDelta !== 0) {
+          const serverQty = await supabaseService.adjustItemQty(updated.id, qtyDelta);
+          setItems((prev) =>
+            prev.map((item) =>
+              item.id === updated.id ? { ...item, qty: serverQty, updatedAt: now } : item
+            )
+          );
+        }
+      } else {
+        await supabaseService.upsertItem(withTimestamp);
+      }
+
       showToast(`Updated: ${updated.name}`);
     } catch (err: any) {
       console.error('Supabase updateItem error:', err);
-      showToast(`Warning: Remote sync error: ${err?.message || 'DB error'}`);
+      if (prevItem) {
+        enqueueRetry('updateItemMeta', {
+          id: updated.id,
+          patch: {
+            name: withTimestamp.name,
+            code: withTimestamp.code || '',
+            barcode: withTimestamp.barcode || '',
+            type: withTimestamp.type || 'General Hardware',
+            brand: withTimestamp.brand || '',
+            size: withTimestamp.size || '',
+            unit: withTimestamp.unit || 'pcs',
+            low: withTimestamp.low,
+            cost: withTimestamp.cost,
+            price: withTimestamp.price,
+            mrp: withTimestamp.mrp || null,
+            image_url: withTimestamp.imageUrl || null,
+            aliases: withTimestamp.aliases || '',
+            updated_at: now
+          }
+        });
+        if (qtyDelta !== 0) {
+          enqueueRetry('adjustStock', { itemId: updated.id, delta: qtyDelta });
+        }
+      } else {
+        enqueueRetry('upsertItem', withTimestamp);
+      }
+      showToast(`Sync error updating "${updated.name}": ${err?.message || 'Queued for retry'}`);
       throw err;
     }
   };
 
   const deleteItem = (id: string) => {
-    const target = items.find((i) => i.id === id);
+    const target = itemsRef.current.find((i) => i.id === id);
     setItems((prev) => prev.filter((i) => i.id !== id));
-    // Delete in Supabase
-    supabaseService.deleteItem(id).catch((err) => console.error(err));
-    showToast(`Deleted: ${target?.name || 'Item'}`);
+    void (async () => {
+      try {
+        await supabaseService.deleteItem(id);
+        showToast(`Deleted: ${target?.name || 'Item'}`);
+      } catch (err: any) {
+        console.error('Supabase deleteItem error:', err);
+        enqueueRetry('deleteItem', { id });
+        showToast(`Failed to delete "${target?.name || 'item'}" remotely — queued for retry`);
+      }
+    })();
   };
 
   const deleteMultipleItems = (ids: string[]) => {
     setItems((prev) => prev.filter((i) => !ids.includes(i.id)));
-    // Delete in Supabase
-    supabaseService.deleteMultipleItems(ids).catch((err) => console.error(err));
-    showToast(`Deleted ${ids.length} items`);
+    void (async () => {
+      let failed = 0;
+      for (const id of ids) {
+        try {
+          await supabaseService.deleteItem(id);
+        } catch (err) {
+          console.error('Supabase deleteMultipleItems error:', id, err);
+          enqueueRetry('deleteItem', { id });
+          failed++;
+        }
+      }
+      if (failed > 0) {
+        showToast(`Deleted locally; ${failed} item(s) queued for remote delete retry`);
+      } else {
+        showToast(`Deleted ${ids.length} items`);
+      }
+    })();
   };
 
   const updateMultipleItemsImage = async (ids: string[], imageUrl: string): Promise<void> => {
@@ -1011,19 +1291,23 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setItems((prev) =>
       prev.map((i) => (ids.includes(i.id) ? { ...i, imageUrl, updatedAt: now } : i))
     );
-    try {
-      await Promise.all(
-        ids.map(async (id) => {
-          const item = items.find((i) => i.id === id);
-          if (item) {
-            await supabaseService.upsertItem({ ...item, imageUrl, updatedAt: now });
-          }
-        })
-      );
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await supabaseService.updateItemImage(id, imageUrl);
+      } catch (err) {
+        console.error('Failed to sync image update for item:', id, err);
+        enqueueRetry('updateItemMeta', {
+          id,
+          patch: { image_url: imageUrl, updated_at: now }
+        });
+        failed++;
+      }
+    }
+    if (failed > 0) {
+      showToast(`Picture update failed on ${failed} item(s) — queued for retry`);
+    } else {
       showToast(`Updated picture for ${ids.length} items`);
-    } catch (err: any) {
-      console.error('Failed to sync image updates:', err);
-      showToast(`Warning: Remote sync error: ${err?.message || 'DB error'}`);
     }
   };
 
@@ -1036,8 +1320,8 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       const newProcessedSet = new Set(processedTintIds);
       const newLogs: ColorTintLog[] = [];
       const newTxList: TransactionRecord[] = [];
-      const updatedItemsMap = new Map<string, Item>(items.map((i) => [i.id, { ...i }]));
-      const itemsToSync = new Map<string, number>();
+      const updatedItemsMap = new Map<string, Item>(itemsRef.current.map((i) => [i.id, { ...i }]));
+      const itemDeltas = new Map<string, number>();
 
       let deductedCount = 0;
       let alreadyCount = 0;
@@ -1084,10 +1368,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             targetItem.qty = newQty;
             targetItem.updatedAt = now;
             updatedItemsMap.set(targetItem.id, targetItem);
-            itemsToSync.set(targetItem.id, newQty);
+            itemDeltas.set(
+              targetItem.id,
+              Math.round(((itemDeltas.get(targetItem.id) || 0) - validDeductQty) * 100) / 100
+            );
 
             const tx: TransactionRecord = {
-              clientId: `tint_tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              clientId: newId('tint_tx'),
               itemId: targetItem.id,
               itemName: targetItem.name,
               action: 'out',
@@ -1098,9 +1385,6 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               createdAt: row.tintTimestampIso || now
             };
             newTxList.push(tx);
-            supabaseService.insertTransaction(tx).catch((err) => {
-              console.error('[Billing/Tint] Failed to sync tint transaction:', { tx, err });
-            });
           } else if (targetItem && validDeductQty <= 0) {
             console.warn('[Billing/Tint] Skipped deduction due to invalid deductQty:', {
               rowIndex: idx,
@@ -1150,20 +1434,41 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setTintLogs((prev) => [...newLogs, ...prev]);
         setProcessedTintIds(Array.from(newProcessedSet));
 
-        itemsToSync.forEach((finalQty, itemId) => {
-          supabaseService.updateItemQty(itemId, finalQty).catch((err) => {
-            console.error('[Billing/Tint] Failed to sync updated item qty to Supabase:', {
-              itemId,
-              finalQty,
-              err
-            });
-          });
-        });
+        void (async () => {
+          let syncErrors = 0;
 
-        const failedSuffix = failedCount > 0 ? ` (${failedCount} failed)` : '';
-        showToast(
-          `Tint Report Applied: ${deductedCount} record(s) deducted (${totalLiters.toFixed(1)} Ltr)${failedSuffix}`
-        );
+          for (const [itemId, delta] of itemDeltas.entries()) {
+            try {
+              const serverQty = await supabaseService.adjustItemQty(itemId, delta);
+              setItems((prev) =>
+                prev.map((it) => (it.id === itemId ? { ...it, qty: serverQty, updatedAt: now } : it))
+              );
+            } catch (err) {
+              syncErrors++;
+              console.error('[Billing/Tint] Failed atomic adjustItemQty:', { itemId, delta, err });
+              enqueueRetry('adjustStock', { itemId, delta });
+            }
+          }
+
+          for (const tx of newTxList) {
+            try {
+              await supabaseService.insertTransaction(tx);
+            } catch (err) {
+              syncErrors++;
+              console.error('[Billing/Tint] Failed syncing tint transaction:', { tx, err });
+              enqueueRetry('insertTransaction', tx);
+            }
+          }
+
+          if (syncErrors > 0) {
+            showToast(`Tint applied locally; ${syncErrors} cloud sync(s) failed & queued`);
+          } else {
+            const failedSuffix = failedCount > 0 ? ` (${failedCount} skipped)` : '';
+            showToast(
+              `Tint Report Applied: ${deductedCount} record(s) deducted (${totalLiters.toFixed(1)} Ltr)${failedSuffix}`
+            );
+          }
+        })();
       } else if (failedCount > 0) {
         showToast(`Tint import encountered ${failedCount} invalid record(s) — check console`);
       } else {
@@ -1185,42 +1490,69 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const addStockTransaction = (itemId: string, action: 'in' | 'out', qty: number, note: string) => {
-    const target = items.find((i) => i.id === itemId);
+    const target = itemsRef.current.find((i) => i.id === itemId);
     if (!target) return;
 
-    const newQty = action === 'in' ? target.qty + qty : target.qty - qty;
+    const delta = action === 'in' ? qty : -qty;
+    const optimisticQty = Math.round((target.qty + delta) * 100) / 100;
     const now = new Date().toISOString();
 
-    // Update item stock locally
     setItems((prev) =>
-      prev.map((i) => (i.id === itemId ? { ...i, qty: newQty, updatedAt: now } : i))
+      prev.map((i) => (i.id === itemId ? { ...i, qty: optimisticQty, updatedAt: now } : i))
     );
 
-    // Sync qty to Supabase
-    supabaseService.updateItemQty(itemId, newQty).catch((err) => {
-      console.error('Remote sync stock update error:', err);
-      showToast(`Warning: Stock updated locally, but remote DB sync failed: ${err?.message || 'Error'}`);
-    });
-
-    // Add transaction record
     const newTx: TransactionRecord = {
-      clientId: `tx_${Date.now()}`,
+      clientId: newId('tx'),
       itemId: target.id,
       itemName: target.name,
       action,
       qty,
-      balance: newQty,
+      balance: optimisticQty,
       note: note || (action === 'in' ? 'Stock Received' : 'Stock Issued'),
       unit: target.unit,
       createdAt: now
     };
     setTransactions((prev) => [newTx, ...prev]);
-    supabaseService.insertTransaction(newTx).catch((err) => console.error(err));
 
-    showToast(`${action === 'in' ? 'Stock Added (+)' : 'Stock Deducted (-)'}: ${qty} ${target.unit}`);
+    void (async () => {
+      let stockOk = true;
+      let txOk = true;
+      let finalBalance = optimisticQty;
+
+      try {
+        finalBalance = await supabaseService.adjustItemQty(itemId, delta);
+        setItems((prev) =>
+          prev.map((i) => (i.id === itemId ? { ...i, qty: finalBalance, updatedAt: now } : i))
+        );
+        setTransactions((prev) =>
+          prev.map((t) => (t.clientId === newTx.clientId ? { ...t, balance: finalBalance } : t))
+        );
+      } catch (err) {
+        stockOk = false;
+        console.error('Remote sync atomic stock adjust error:', err);
+        enqueueRetry('adjustStock', { itemId, delta });
+      }
+
+      const txToSave = { ...newTx, balance: finalBalance };
+      try {
+        await supabaseService.insertTransaction(txToSave);
+      } catch (err) {
+        txOk = false;
+        console.error('Remote insertTransaction error:', err);
+        enqueueRetry('insertTransaction', txToSave);
+      }
+
+      if (stockOk && txOk) {
+        showToast(
+          `${action === 'in' ? 'Stock Added (+)' : 'Stock Deducted (-)'}: ${qty} ${target.unit}`
+        );
+      } else {
+        showToast('Saved locally — cloud sync failed & queued for retry');
+      }
+    })();
   };
 
-  // Purchase Bill Confirmation
+  // Purchase Bill Confirmation (paise integer math + atomic adjust_stock for existing SKUs)
   const confirmPurchaseBill = (
     supplier: string,
     billNo: string,
@@ -1239,12 +1571,12 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
 
       const now = new Date().toISOString();
-      const workingItemsMap = new Map<string, Item>(items.map((i) => [i.id, { ...i }]));
+      const workingItemsMap = new Map<string, Item>(itemsRef.current.map((i) => [i.id, { ...i }]));
+      const existingItemDeltas = new Map<string, { delta: number; cost?: number }>();
       const newItemsCreated: Item[] = [];
       const newTxList: TransactionRecord[] = [];
-      const itemsToSync = new Map<string, Item>();
       const skippedRows: string[] = [];
-      let totalBillAmount = 0;
+      let totalBillPaise = 0;
       let processedCount = 0;
 
       included.forEach((row, idx) => {
@@ -1254,30 +1586,18 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           const rowRate = Number(row.rate);
 
           if (!Number.isFinite(rowQty) || rowQty <= 0) {
-            console.warn('[Billing/Purchase] Skipped row with invalid quantity:', {
-              rowIndex: idx,
-              rowName: cleanRowName,
-              rawQty: row.qty
-            });
             skippedRows.push(cleanRowName);
             return;
           }
 
           const safeRate = Number.isFinite(rowRate) && rowRate >= 0 ? rowRate : 0;
-          const lineCost = Math.round(safeRate * rowQty * 100) / 100;
-          totalBillAmount += lineCost;
+          const lineCost = calcLineAmount(rowQty, safeRate);
+          totalBillPaise += toPaise(lineCost);
 
           const rawMatchedId = typeof row.matchedItemId === 'string' ? row.matchedItemId.trim() : '';
           let existing: Item | undefined = rawMatchedId ? workingItemsMap.get(rawMatchedId) : undefined;
 
           if (!existing) {
-            if (rawMatchedId) {
-              console.warn('[Billing/Purchase] matchedItemId not found in catalog; trying name match:', {
-                rowIndex: idx,
-                matchedItemId: rawMatchedId,
-                rowName: cleanRowName
-              });
-            }
             const normalizedName = cleanRowName.toLowerCase();
             existing = Array.from(workingItemsMap.values()).find(
               (i) => (i.name || '').trim().toLowerCase() === normalizedName
@@ -1291,17 +1611,25 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               throw new Error(`Invalid stock calculation for "${existing.name}"`);
             }
 
+            const updatedCost = safeRate > 0 ? safeRate : existing.cost;
             const updatedItem: Item = {
               ...existing,
               qty: newQty,
-              cost: safeRate > 0 ? safeRate : existing.cost,
+              cost: updatedCost,
               updatedAt: now
             };
             workingItemsMap.set(existing.id, updatedItem);
-            itemsToSync.set(existing.id, updatedItem);
+
+            if (!newItemsCreated.some((c) => c.id === existing!.id)) {
+              const prevEntry = existingItemDeltas.get(existing.id);
+              existingItemDeltas.set(existing.id, {
+                delta: Math.round(((prevEntry?.delta || 0) + rowQty) * 100) / 100,
+                cost: safeRate > 0 ? safeRate : prevEntry?.cost
+              });
+            }
 
             const tx: TransactionRecord = {
-              clientId: `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              clientId: newId('tx'),
               itemId: existing.id,
               itemName: existing.name,
               action: 'in',
@@ -1314,7 +1642,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             newTxList.push(tx);
           } else {
             const newItem: Item = {
-              id: `item_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+              id: newId('item'),
               o: workingItemsMap.size + 1,
               name: cleanRowName,
               code: '',
@@ -1333,10 +1661,9 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             };
             workingItemsMap.set(newItem.id, newItem);
             newItemsCreated.push(newItem);
-            itemsToSync.set(newItem.id, newItem);
 
             const tx: TransactionRecord = {
-              clientId: `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+              clientId: newId('tx'),
               itemId: newItem.id,
               itemName: newItem.name,
               action: 'in',
@@ -1364,7 +1691,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return;
       }
 
-      // Commit inventory updates once with cumulative quantities
+      const totalBillAmount = fromPaise(totalBillPaise);
       const updatedCatalog = Array.from(workingItemsMap.values()).filter(
         (i) => !newItemsCreated.some((created) => created.id === i.id)
       );
@@ -1373,139 +1700,172 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         setTransactions((prev) => [...newTxList, ...prev]);
       }
 
-      // Sync items and transactions safely
-      itemsToSync.forEach((itemToSync) => {
-        supabaseService.upsertItem(itemToSync).catch((err) => {
-          console.error('[Billing/Purchase] Remote upsertItem failed:', {
-            itemId: itemToSync.id,
-            itemName: itemToSync.name,
-            err
-          });
-        });
-      });
-      newTxList.forEach((tx) => {
-        supabaseService.insertTransaction(tx).catch((err) => {
-          console.error('[Billing/Purchase] Remote insertTransaction failed:', { tx, err });
-        });
-      });
+      // Prepare optional supplier ledger account + entry
+      let accountToSync: LedgerAccount | null = null;
+      let entryToSync: LedgerEntry | null = null;
+      const cleanSupplier = (supplier || '').trim();
+      if (cleanSupplier.length > 0 && Number.isFinite(totalBillAmount)) {
+        const existingAccount = ledgerAccountsRef.current.find(
+          (acc) =>
+            acc.type === 'SUPPLIER' &&
+            (acc.name || '').trim().toLowerCase() === cleanSupplier.toLowerCase()
+        );
 
-      // Update supplier ledger safely
-      try {
-        const cleanSupplier = (supplier || '').trim();
-        if (cleanSupplier.length > 0 && Number.isFinite(totalBillAmount)) {
-          const existingAccount = ledgerAccounts.find(
-            (acc) =>
-              acc.type === 'SUPPLIER' &&
-              (acc.name || '').trim().toLowerCase() === cleanSupplier.toLowerCase()
+        if (existingAccount) {
+          const newBalance = addMoney(existingAccount.netBalance, totalBillAmount);
+          const updatedAcc = { ...existingAccount, netBalance: newBalance, updatedAt: now };
+          setLedgerAccounts((prev) =>
+            prev.map((acc) => (acc.id === existingAccount.id ? updatedAcc : acc))
           );
+          accountToSync = updatedAcc;
 
-          if (existingAccount) {
-            const currentBal = Number.isFinite(Number(existingAccount.netBalance))
-              ? Number(existingAccount.netBalance)
-              : 0;
-            const newBalance = Math.round((currentBal + totalBillAmount) * 100) / 100;
-            const updatedAcc = { ...existingAccount, netBalance: newBalance, updatedAt: now };
-            setLedgerAccounts((prev) =>
-              prev.map((acc) => (acc.id === existingAccount.id ? updatedAcc : acc))
-            );
-            supabaseService.upsertLedgerAccount(updatedAcc).catch((err) => {
-              console.error('[Billing/Purchase] upsertLedgerAccount failed:', err);
-            });
+          const newEntry: LedgerEntry = {
+            id: newId('entry'),
+            accountId: existingAccount.id,
+            type: 'GOT',
+            amount: totalBillAmount,
+            balanceAfter: newBalance,
+            date: billDate || now.split('T')[0],
+            description: `Purchase Bill #${billNo || 'Bill'} (${processedCount} items)`,
+            billRef: billNo,
+            createdAt: now
+          };
+          setLedgerEntries((prev) => [newEntry, ...prev]);
+          entryToSync = newEntry;
+        } else {
+          const newAcc: LedgerAccount = {
+            id: newId('acc'),
+            name: cleanSupplier,
+            phone: '',
+            address: '',
+            type: 'SUPPLIER',
+            netBalance: totalBillAmount,
+            creditLimit: 100000,
+            notes: 'Auto-created from purchase bill',
+            createdAt: now,
+            updatedAt: now
+          };
+          setLedgerAccounts((prev) => [newAcc, ...prev]);
+          accountToSync = newAcc;
 
-            const newEntry: LedgerEntry = {
-              id: `entry_${Date.now()}`,
-              accountId: existingAccount.id,
-              type: 'GOT',
-              amount: totalBillAmount,
-              balanceAfter: newBalance,
-              date: billDate || now.split('T')[0],
-              description: `Purchase Bill #${billNo || 'Bill'} (${processedCount} items)`,
-              billRef: billNo,
-              createdAt: now
-            };
-            setLedgerEntries((prev) => [newEntry, ...prev]);
-            supabaseService.upsertLedgerEntry(newEntry).catch((err) => {
-              console.error('[Billing/Purchase] upsertLedgerEntry failed:', err);
-            });
-          } else {
-            const newAcc: LedgerAccount = {
-              id: `acc_${Date.now()}`,
-              name: cleanSupplier,
-              phone: '',
-              address: '',
-              type: 'SUPPLIER',
-              netBalance: totalBillAmount,
-              creditLimit: 100000,
-              notes: 'Auto-created from purchase bill',
-              createdAt: now,
-              updatedAt: now
-            };
-            setLedgerAccounts((prev) => [newAcc, ...prev]);
-            supabaseService.upsertLedgerAccount(newAcc).catch((err) => {
-              console.error('[Billing/Purchase] upsertLedgerAccount (new) failed:', err);
-            });
+          const newEntry: LedgerEntry = {
+            id: newId('entry'),
+            accountId: newAcc.id,
+            type: 'GOT',
+            amount: totalBillAmount,
+            balanceAfter: totalBillAmount,
+            date: billDate || now.split('T')[0],
+            description: `Purchase Bill #${billNo || 'Bill'} (${processedCount} items)`,
+            billRef: billNo,
+            createdAt: now
+          };
+          setLedgerEntries((prev) => [newEntry, ...prev]);
+          entryToSync = newEntry;
+        }
+      }
 
-            const newEntry: LedgerEntry = {
-              id: `entry_${Date.now()}`,
-              accountId: newAcc.id,
-              type: 'GOT',
-              amount: totalBillAmount,
-              balanceAfter: totalBillAmount,
-              date: billDate || now.split('T')[0],
-              description: `Purchase Bill #${billNo || 'Bill'} (${processedCount} items)`,
-              billRef: billNo,
-              createdAt: now
-            };
-            setLedgerEntries((prev) => [newEntry, ...prev]);
-            supabaseService.upsertLedgerEntry(newEntry).catch((err) => {
-              console.error('[Billing/Purchase] upsertLedgerEntry (new) failed:', err);
-            });
+      const purchasePayload = {
+        client_id: newId('purchase'),
+        supplier: supplier || '',
+        billNo: billNo || '',
+        billDate: billDate || now.split('T')[0],
+        total: totalBillAmount,
+        lines: included.map((r) => ({
+          name: r.name,
+          qty: Number.isFinite(Number(r.qty)) ? Number(r.qty) : 0,
+          rate: Number.isFinite(Number(r.rate)) ? Number(r.rate) : 0,
+          bill_name: r.name
+        })),
+        createdAt: now
+      };
+
+      void (async () => {
+        let syncErrors = 0;
+
+        for (const createdItem of newItemsCreated) {
+          const latestVersion = workingItemsMap.get(createdItem.id) || createdItem;
+          try {
+            await supabaseService.upsertItem(latestVersion);
+          } catch (err) {
+            syncErrors++;
+            console.error('[Billing/Purchase] upsert new item failed:', err);
+            enqueueRetry('upsertItem', latestVersion);
           }
         }
-      } catch (ledgerErr) {
-        console.error('[Billing/Purchase] Failed updating supplier Khata ledger:', {
-          supplier,
-          billNo,
-          error: ledgerErr
-        });
-      }
 
-      // Sync bill to Supabase purchases table safely
-      try {
-        supabaseService
-          .insertPurchaseRecord({
-            supplier: supplier || '',
-            billNo: billNo || '',
-            billDate: billDate || now.split('T')[0],
-            total: totalBillAmount,
-            lines: included.map((r) => ({
-              name: r.name,
-              qty: Number.isFinite(Number(r.qty)) ? Number(r.qty) : 0,
-              rate: Number.isFinite(Number(r.rate)) ? Number(r.rate) : 0,
-              bill_name: r.name
-            })),
-            createdAt: now
-          })
-          .catch((err) => {
-            console.error('[Billing/Purchase] insertPurchaseRecord failed:', err);
-          });
-      } catch (syncErr) {
-        console.error('[Billing/Purchase] Purchase record sync preparation failed:', syncErr);
-      }
+        for (const [itemId, info] of existingItemDeltas.entries()) {
+          if (info.cost !== undefined) {
+            try {
+              await supabaseService.updateItemMetadata(itemId, { cost: info.cost, updated_at: now });
+            } catch (err) {
+              syncErrors++;
+              console.error('[Billing/Purchase] updateItemMetadata failed:', err);
+              enqueueRetry('updateItemMeta', {
+                id: itemId,
+                patch: { cost: info.cost, updated_at: now }
+              });
+            }
+          }
+          try {
+            const serverQty = await supabaseService.adjustItemQty(itemId, info.delta);
+            setItems((prev) =>
+              prev.map((it) => (it.id === itemId ? { ...it, qty: serverQty, updatedAt: now } : it))
+            );
+          } catch (err) {
+            syncErrors++;
+            console.error('[Billing/Purchase] adjustItemQty failed:', err);
+            enqueueRetry('adjustStock', { itemId, delta: info.delta });
+          }
+        }
 
-      if (skippedRows.length > 0) {
-        showToast(
-          `Bill confirmed: ${processedCount} items synced, ${skippedRows.length} skipped — check console`
-        );
-      } else {
-        showToast(`Bill confirmed! ${processedCount} items synced to Supabase.`);
-      }
+        for (const tx of newTxList) {
+          try {
+            await supabaseService.insertTransaction(tx);
+          } catch (err) {
+            syncErrors++;
+            console.error('[Billing/Purchase] insertTransaction failed:', err);
+            enqueueRetry('insertTransaction', tx);
+          }
+        }
+
+        if (accountToSync) {
+          try {
+            await supabaseService.upsertLedgerAccount(accountToSync);
+          } catch (err) {
+            syncErrors++;
+            console.error('[Billing/Purchase] upsertLedgerAccount failed:', err);
+            enqueueRetry('upsertLedgerAccount', accountToSync);
+          }
+        }
+
+        if (entryToSync) {
+          try {
+            await supabaseService.upsertLedgerEntry(entryToSync);
+          } catch (err) {
+            syncErrors++;
+            console.error('[Billing/Purchase] upsertLedgerEntry failed:', err);
+            enqueueRetry('insertLedgerEntry', entryToSync);
+          }
+        }
+
+        try {
+          await supabaseService.insertPurchaseRecord(purchasePayload);
+        } catch (err) {
+          syncErrors++;
+          console.error('[Billing/Purchase] insertPurchaseRecord failed:', err);
+          enqueueRetry('insertPurchase', purchasePayload);
+        }
+
+        if (syncErrors > 0) {
+          showToast(`Purchase bill saved locally; ${syncErrors} sync op(s) failed & queued`);
+        } else if (skippedRows.length > 0) {
+          showToast(`Bill confirmed: ${processedCount} items synced, ${skippedRows.length} skipped`);
+        } else {
+          showToast(`Bill confirmed! ${processedCount} items synced to Supabase.`);
+        }
+      })();
     } catch (err) {
-      console.error('[Billing/Purchase] confirmPurchaseBill failed unexpectedly:', {
-        supplier,
-        billNo,
-        error: err
-      });
+      console.error('[Billing/Purchase] confirmPurchaseBill failed unexpectedly:', err);
       showToast('Purchase bill update failed — check console for details');
     }
   };
@@ -1514,60 +1874,79 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const createQuotation = (
     quoteData: Omit<QuotationRecord, 'id' | 'quotationNo' | 'createdAt'>
   ): QuotationRecord => {
-    const qCount = quotations.length + 1;
+    const qCount = quotationsRef.current.length + 1;
     const quotationNo = `QT-${new Date().getFullYear()}-${qCount.toString().padStart(3, '0')}`;
     const newQuote: QuotationRecord = {
       ...quoteData,
-      id: `quote_${Date.now()}`,
+      id: newId('quote'),
       quotationNo,
       createdAt: new Date().toISOString()
     };
     setQuotations((prev) => [newQuote, ...prev]);
-    supabaseService.upsertQuotation(newQuote).catch(err => console.error(err));
-    showToast(`Quotation ${quotationNo} generated`);
+
+    void (async () => {
+      try {
+        await supabaseService.upsertQuotation(newQuote);
+        showToast(`Quotation ${quotationNo} generated`);
+      } catch (err) {
+        console.error('Failed saving quotation remotely:', err);
+        enqueueRetry('upsertQuotation', newQuote);
+        showToast(`Quotation ${quotationNo} saved locally — cloud sync failed & queued`);
+      }
+    })();
+
     return newQuote;
   };
 
   const updateQuotation = (quote: QuotationRecord) => {
     setQuotations((prev) => prev.map((q) => (q.id === quote.id ? quote : q)));
-    supabaseService.upsertQuotation(quote).catch(err => console.error(err));
-    showToast(`Quotation ${quote.quotationNo} updated`);
+    void (async () => {
+      try {
+        await supabaseService.upsertQuotation(quote);
+        showToast(`Quotation ${quote.quotationNo} updated`);
+      } catch (err) {
+        console.error('Failed updating quotation remotely:', err);
+        enqueueRetry('upsertQuotation', quote);
+        showToast(`Quotation ${quote.quotationNo} updated locally — cloud sync failed & queued`);
+      }
+    })();
   };
 
   const deleteQuotation = (id: string) => {
     setQuotations((prev) => prev.filter((q) => q.id !== id));
-    supabaseService.deleteQuotation(id).catch(err => console.error(err));
-    showToast('Quotation deleted');
+    void (async () => {
+      try {
+        await supabaseService.deleteQuotation(id);
+        showToast('Quotation deleted');
+      } catch (err) {
+        console.error('Failed deleting quotation remotely:', err);
+        enqueueRetry('deleteQuotation', { id });
+        showToast('Deleted locally — cloud delete failed & queued for retry');
+      }
+    })();
   };
 
   const convertQuotationToBill = (quoteId: string) => {
     try {
-      const quote = quotations.find((q) => q.id === quoteId);
+      const quote = quotationsRef.current.find((q) => q.id === quoteId);
       if (!quote) {
-        console.warn('[Billing] convertQuotationToBill aborted: quotation not found', { quoteId });
         showToast('Quotation not found');
         return;
       }
-
       if (quote.status === 'Converted') {
-        console.warn('[Billing] convertQuotationToBill skipped: quotation already converted', {
-          quoteId,
-          quotationNo: quote.quotationNo
-        });
         showToast(`Quote #${quote.quotationNo} is already converted`);
         return;
       }
 
       const now = new Date().toISOString();
       const quoteLines = Array.isArray(quote.items) ? quote.items : [];
-      const workingItemsMap = new Map<string, Item>(items.map((i) => [i.id, { ...i }]));
-      const updatedItemIds = new Set<string>();
+      const workingItemsMap = new Map<string, Item>(itemsRef.current.map((i) => [i.id, { ...i }]));
+      const deductionDeltas = new Map<string, number>();
       const newTxList: TransactionRecord[] = [];
       const unmatchedLines: string[] = [];
       const invalidLines: string[] = [];
       let deductedCount = 0;
 
-      // Deduct inventory line-by-line with granular isolation so one bad item match never crashes billing
       quoteLines.forEach((line, idx) => {
         try {
           if (!line || typeof line !== 'object') {
@@ -1583,49 +1962,15 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             match = Array.from(workingItemsMap.values()).find(
               (i) => (i.name || '').trim().toLowerCase() === normalizedLineName
             );
-            if (match && rawItemId) {
-              console.warn(
-                '[Billing] Quotation line itemId not found in catalog; matched by name fallback:',
-                {
-                  quoteId,
-                  quotationNo: quote.quotationNo,
-                  lineIndex: idx,
-                  staleItemId: rawItemId,
-                  matchedItemId: match.id,
-                  matchedName: match.name
-                }
-              );
-            }
           }
 
           if (!match) {
-            console.warn(
-              '[Billing] Skipped inventory deduction — no valid catalog item match found:',
-              {
-                quoteId,
-                quotationNo: quote.quotationNo,
-                lineIndex: idx,
-                itemId: line.itemId ?? null,
-                itemName: line.name ?? ''
-              }
-            );
             unmatchedLines.push(rawLineName || `Line #${idx + 1}`);
             return;
           }
 
           const deductQty = Number(line.qty);
           if (!Number.isFinite(deductQty) || deductQty <= 0) {
-            console.warn(
-              '[Billing] Skipped inventory deduction — invalid line quantity:',
-              {
-                quoteId,
-                quotationNo: quote.quotationNo,
-                lineIndex: idx,
-                itemId: match.id,
-                itemName: match.name,
-                rawQty: line.qty
-              }
-            );
             invalidLines.push(rawLineName || match.name);
             return;
           }
@@ -1637,10 +1982,13 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           }
 
           workingItemsMap.set(match.id, { ...match, qty: newBal, updatedAt: now });
-          updatedItemIds.add(match.id);
+          deductionDeltas.set(
+            match.id,
+            Math.round(((deductionDeltas.get(match.id) || 0) - deductQty) * 100) / 100
+          );
 
           const tx: TransactionRecord = {
-            clientId: `tx_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 7)}`,
+            clientId: newId('tx'),
             itemId: match.id,
             itemName: match.name,
             action: 'out',
@@ -1653,98 +2001,93 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           newTxList.push(tx);
           deductedCount++;
         } catch (lineErr) {
-          console.error('[Billing] Inventory deduction error for quotation line:', {
-            quoteId,
-            quotationNo: quote.quotationNo,
-            lineIndex: idx,
-            line,
-            error: lineErr
-          });
+          console.error('[Billing] Inventory deduction error for quotation line:', lineErr);
           invalidLines.push(line?.name || `Line #${idx + 1}`);
         }
       });
 
-      // Commit cumulative stock & transaction updates
-      if (updatedItemIds.size > 0) {
+      if (deductionDeltas.size > 0) {
         setItems(Array.from(workingItemsMap.values()));
-        updatedItemIds.forEach((itemId) => {
-          const updated = workingItemsMap.get(itemId);
-          if (updated) {
-            supabaseService.updateItemQty(itemId, updated.qty).catch((err) => {
-              console.error('[Billing] Failed syncing deducted item qty to Supabase:', {
-                quoteId,
-                itemId,
-                qty: updated.qty,
-                err
-              });
-            });
-          }
-        });
       }
-
       if (newTxList.length > 0) {
         setTransactions((prev) => [...newTxList, ...prev]);
-        newTxList.forEach((tx) => {
-          supabaseService.insertTransaction(tx).catch((err) => {
-            console.error('[Billing] Failed syncing quotation sale transaction:', { tx, err });
-          });
-        });
       }
 
-      // Record cashflow safely
-      try {
-        const rawGrandTotal = Number(quote.grandTotal ?? (quote as any).finalAmount ?? 0);
-        const safeGrandTotal = Number.isFinite(rawGrandTotal) ? rawGrandTotal : 0;
-        const cf: DailyCashflowRecord = {
-          id: `cf_${Date.now()}`,
-          date: new Date().toISOString().split('T')[0],
-          type: 'SALE',
-          category: 'Hardware & Quotation Sale',
-          amount: safeGrandTotal,
-          paymentMode: 'Cash',
-          note: `Quotation #${quote.quotationNo || ''} - ${quote.customerName || 'Walk-in Customer'}`,
-          createdAt: now
-        };
-        setDailyCashflows((prev) => [cf, ...prev]);
-        supabaseService.insertCashflowRecord(cf).catch((err) => {
-          console.error('[Billing] Failed syncing quotation cashflow to Supabase:', { cf, err });
-        });
-      } catch (cfErr) {
-        console.error('[Billing] Failed creating cashflow record for converted quotation:', {
-          quoteId,
-          error: cfErr
-        });
-      }
+      const safeGrandTotal = fromPaise(
+        toPaise(Number(quote.grandTotal ?? (quote as any).finalAmount ?? 0))
+      );
+      const cf: DailyCashflowRecord = {
+        id: newId('cf'),
+        date: new Date().toISOString().split('T')[0],
+        type: 'SALE',
+        category: 'Hardware & Quotation Sale',
+        amount: safeGrandTotal,
+        paymentMode: 'Cash',
+        note: `Quotation #${quote.quotationNo || ''} - ${quote.customerName || 'Walk-in Customer'}`,
+        createdAt: now
+      };
+      setDailyCashflows((prev) => [cf, ...prev]);
 
-      // Mark quotation as Converted and sync
-      try {
-        const convertedQuote: QuotationRecord = { ...quote, status: 'Converted' };
-        setQuotations((prev) =>
-          prev.map((q) => (q.id === quoteId ? convertedQuote : q))
-        );
-        supabaseService.upsertQuotation(convertedQuote).catch((err) => {
-          console.error('[Billing] Failed syncing converted quotation status to Supabase:', {
-            quoteId,
-            err
-          });
-        });
-      } catch (statusErr) {
-        console.error('[Billing] Failed updating quotation status to Converted:', {
-          quoteId,
-          error: statusErr
-        });
-      }
+      const convertedQuote: QuotationRecord = { ...quote, status: 'Converted' };
+      setQuotations((prev) => prev.map((q) => (q.id === quoteId ? convertedQuote : q)));
 
-      const skippedTotal = unmatchedLines.length + invalidLines.length;
-      if (skippedTotal > 0) {
-        showToast(
-          `Quote #${quote.quotationNo} converted (${deductedCount} deducted, ${skippedTotal} skipped — check console)`
-        );
-      } else {
-        showToast(`Quote #${quote.quotationNo} converted to Bill & inventory updated!`);
-      }
+      void (async () => {
+        let syncErrors = 0;
+
+        for (const [itemId, delta] of deductionDeltas.entries()) {
+          try {
+            const serverQty = await supabaseService.adjustItemQty(itemId, delta);
+            setItems((prev) =>
+              prev.map((it) => (it.id === itemId ? { ...it, qty: serverQty, updatedAt: now } : it))
+            );
+          } catch (err) {
+            syncErrors++;
+            console.error('[Billing] Failed atomic adjustItemQty on quote convert:', err);
+            enqueueRetry('adjustStock', { itemId, delta });
+          }
+        }
+
+        for (const tx of newTxList) {
+          try {
+            await supabaseService.insertTransaction(tx);
+          } catch (err) {
+            syncErrors++;
+            console.error('[Billing] Failed syncing quote sale tx:', err);
+            enqueueRetry('insertTransaction', tx);
+          }
+        }
+
+        try {
+          await supabaseService.insertCashflowRecord(cf);
+        } catch (err) {
+          syncErrors++;
+          console.error('[Billing] Failed syncing quote cashflow:', err);
+          enqueueRetry('upsertCashflow', cf);
+        }
+
+        try {
+          await supabaseService.upsertQuotation(convertedQuote);
+        } catch (err) {
+          syncErrors++;
+          console.error('[Billing] Failed syncing converted quote status:', err);
+          enqueueRetry('upsertQuotation', convertedQuote);
+        }
+
+        const skippedTotal = unmatchedLines.length + invalidLines.length;
+        if (syncErrors > 0) {
+          showToast(
+            `Quote #${quote.quotationNo} converted locally; ${syncErrors} sync op(s) queued`
+          );
+        } else if (skippedTotal > 0) {
+          showToast(
+            `Quote #${quote.quotationNo} converted (${deductedCount} deducted, ${skippedTotal} skipped)`
+          );
+        } else {
+          showToast(`Quote #${quote.quotationNo} converted to Bill & inventory updated!`);
+        }
+      })();
     } catch (err) {
-      console.error('[Billing] convertQuotationToBill failed unexpectedly:', { quoteId, error: err });
+      console.error('[Billing] convertQuotationToBill failed unexpectedly:', err);
       showToast('Failed to convert quotation to bill — check console');
     }
   };
@@ -1755,53 +2098,100 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     openingBalance: number = 0
   ): LedgerAccount => {
     const now = new Date().toISOString();
+    const safeOpening = fromPaise(toPaise(openingBalance));
     const newAcc: LedgerAccount = {
       ...accData,
-      id: `acc_${Date.now()}`,
-      netBalance: openingBalance,
+      id: newId('acc'),
+      netBalance: safeOpening,
       createdAt: now,
       updatedAt: now
     };
 
     setLedgerAccounts((prev) => [newAcc, ...prev]);
-    supabaseService.upsertLedgerAccount(newAcc).catch(err => console.error(err));
 
-    if (openingBalance !== 0) {
+    let openingEntry: LedgerEntry | null = null;
+    if (safeOpening !== 0) {
       const isCustomer = newAcc.type === 'CUSTOMER';
-      const entryType = isCustomer ? (openingBalance > 0 ? 'GAVE' : 'GOT') : (openingBalance > 0 ? 'GOT' : 'GAVE');
-      const openingEntry: LedgerEntry = {
-        id: `entry_${Date.now()}`,
+      const entryType = isCustomer
+        ? safeOpening > 0
+          ? 'GAVE'
+          : 'GOT'
+        : safeOpening > 0
+        ? 'GOT'
+        : 'GAVE';
+      openingEntry = {
+        id: newId('entry'),
         accountId: newAcc.id,
         type: entryType,
-        amount: Math.abs(openingBalance),
-        balanceAfter: openingBalance,
+        amount: Math.abs(safeOpening),
+        balanceAfter: safeOpening,
         date: now.split('T')[0],
         description: 'Opening Balance',
         billRef: '',
         createdAt: now
       };
-      setLedgerEntries((prev) => [openingEntry, ...prev]);
-      supabaseService.upsertLedgerEntry(openingEntry).catch(err => console.error(err));
+      setLedgerEntries((prev) => [openingEntry!, ...prev]);
     }
 
-    showToast(`Added ${newAcc.type === 'CUSTOMER' ? 'Customer' : 'Supplier'}: ${newAcc.name}`);
+    void (async () => {
+      let syncErrors = 0;
+      try {
+        await supabaseService.upsertLedgerAccount(newAcc);
+      } catch (err) {
+        syncErrors++;
+        console.error('Failed saving ledger account remotely:', err);
+        enqueueRetry('upsertLedgerAccount', newAcc);
+      }
+      if (openingEntry) {
+        try {
+          await supabaseService.upsertLedgerEntry(openingEntry);
+        } catch (err) {
+          syncErrors++;
+          console.error('Failed saving opening ledger entry remotely:', err);
+          enqueueRetry('insertLedgerEntry', openingEntry);
+        }
+      }
+      if (syncErrors > 0) {
+        showToast('Account saved locally — cloud sync failed & queued for retry');
+      } else {
+        showToast(`Added ${newAcc.type === 'CUSTOMER' ? 'Customer' : 'Supplier'}: ${newAcc.name}`);
+      }
+    })();
+
     return newAcc;
   };
 
   const updateLedgerAccount = (updated: LedgerAccount) => {
+    const withTs = { ...updated, updatedAt: new Date().toISOString() };
     setLedgerAccounts((prev) =>
-      prev.map((acc) => (acc.id === updated.id ? { ...updated, updatedAt: new Date().toISOString() } : acc))
+      prev.map((acc) => (acc.id === updated.id ? withTs : acc))
     );
-    supabaseService.upsertLedgerAccount(updated).catch(err => console.error(err));
-    showToast(`Account updated: ${updated.name}`);
+    void (async () => {
+      try {
+        await supabaseService.upsertLedgerAccount(withTs);
+        showToast(`Account updated: ${updated.name}`);
+      } catch (err) {
+        console.error('Failed updating ledger account remotely:', err);
+        enqueueRetry('upsertLedgerAccount', withTs);
+        showToast('Account updated locally — cloud sync failed & queued');
+      }
+    })();
   };
 
   const deleteLedgerAccount = (id: string) => {
-    const acc = ledgerAccounts.find((a) => a.id === id);
+    const acc = ledgerAccountsRef.current.find((a) => a.id === id);
     setLedgerAccounts((prev) => prev.filter((a) => a.id !== id));
     setLedgerEntries((prev) => prev.filter((e) => e.accountId !== id));
-    supabaseService.deleteLedgerAccount(id).catch(err => console.error(err));
-    showToast(`Deleted account: ${acc?.name || ''}`);
+    void (async () => {
+      try {
+        await supabaseService.deleteLedgerAccount(id);
+        showToast(`Deleted account: ${acc?.name || ''}`);
+      } catch (err) {
+        console.error('Failed deleting ledger account remotely:', err);
+        enqueueRetry('deleteLedgerAccount', { id });
+        showToast('Deleted locally — cloud delete failed & queued for retry');
+      }
+    })();
   };
 
   const addLedgerEntry = (
@@ -1812,63 +2202,92 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     billRef: string = '',
     date?: string
   ) => {
-    const acc = ledgerAccounts.find((a) => a.id === accountId);
+    const acc = ledgerAccountsRef.current.find((a) => a.id === accountId);
     if (!acc) return;
 
+    const cleanAmount = fromPaise(toPaise(amount));
     let balanceDelta = 0;
     if (acc.type === 'CUSTOMER') {
-      balanceDelta = type === 'GAVE' ? amount : -amount;
+      balanceDelta = type === 'GAVE' ? cleanAmount : -cleanAmount;
     } else {
-      balanceDelta = type === 'GOT' ? amount : -amount;
+      balanceDelta = type === 'GOT' ? cleanAmount : -cleanAmount;
     }
 
-    const newBalance = acc.netBalance + balanceDelta;
+    const newBalance = addMoney(acc.netBalance, balanceDelta);
     const now = new Date().toISOString();
 
     const updatedAccount = { ...acc, netBalance: newBalance, updatedAt: now };
     setLedgerAccounts((prev) =>
       prev.map((a) => (a.id === accountId ? updatedAccount : a))
     );
-    supabaseService.upsertLedgerAccount(updatedAccount).catch(err => console.error(err));
 
     const newEntry: LedgerEntry = {
-      id: `entry_${Date.now()}`,
+      id: newId('entry'),
       accountId,
       type,
-      amount,
+      amount: cleanAmount,
       balanceAfter: newBalance,
       date: date || now.split('T')[0],
       description,
       billRef,
       createdAt: now
     };
-
     setLedgerEntries((prev) => [newEntry, ...prev]);
-    supabaseService.upsertLedgerEntry(newEntry).catch(err => console.error(err));
 
+    let cf: DailyCashflowRecord | null = null;
     if (acc.type === 'CUSTOMER' && type === 'GOT') {
-      const cf: DailyCashflowRecord = {
-        id: `cf_${Date.now()}`,
+      cf = {
+        id: newId('cf'),
         date: date || now.split('T')[0],
         type: 'SALE',
         category: 'Customer Khata Collection',
-        amount,
+        amount: cleanAmount,
         paymentMode: 'Cash',
         note: `Payment from ${acc.name}${description ? ` (${description})` : ''}`,
         createdAt: now
       };
-      setDailyCashflows((prev) => [cf, ...prev]);
-      supabaseService.insertCashflowRecord(cf).catch(err => console.error(err));
+      setDailyCashflows((prev) => [cf!, ...prev]);
     }
 
-    showToast(`Entry added: ₹${amount.toFixed(2)} (${type})`);
+    void (async () => {
+      let syncErrors = 0;
+      try {
+        await supabaseService.upsertLedgerAccount(updatedAccount);
+      } catch (err) {
+        syncErrors++;
+        console.error('Failed syncing ledger account balance:', err);
+        enqueueRetry('upsertLedgerAccount', updatedAccount);
+      }
+      try {
+        await supabaseService.upsertLedgerEntry(newEntry);
+      } catch (err) {
+        syncErrors++;
+        console.error('Failed syncing ledger entry:', err);
+        enqueueRetry('insertLedgerEntry', newEntry);
+      }
+      if (cf) {
+        try {
+          await supabaseService.insertCashflowRecord(cf);
+        } catch (err) {
+          syncErrors++;
+          console.error('Failed syncing cashflow for customer collection:', err);
+          enqueueRetry('upsertCashflow', cf);
+        }
+      }
+      if (syncErrors > 0) {
+        showToast('Entry saved locally — cloud sync failed & queued for retry');
+      } else {
+        showToast(`Entry added: ₹${cleanAmount.toFixed(2)} (${type})`);
+      }
+    })();
   };
 
   const deleteLedgerEntry = (entryId: string) => {
-    const entry = ledgerEntries.find((e) => e.id === entryId);
+    const entry = ledgerEntriesRef.current.find((e) => e.id === entryId);
     if (!entry) return;
 
-    const acc = ledgerAccounts.find((a) => a.id === entry.accountId);
+    const acc = ledgerAccountsRef.current.find((a) => a.id === entry.accountId);
+    let updatedAcc: LedgerAccount | null = null;
     if (acc) {
       let reverseDelta = 0;
       if (acc.type === 'CUSTOMER') {
@@ -1876,35 +2295,76 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } else {
         reverseDelta = entry.type === 'GOT' ? -entry.amount : entry.amount;
       }
-      const newBal = acc.netBalance + reverseDelta;
-      const updatedAcc = { ...acc, netBalance: newBal, updatedAt: new Date().toISOString() };
+      const newBal = addMoney(acc.netBalance, reverseDelta);
+      updatedAcc = { ...acc, netBalance: newBal, updatedAt: new Date().toISOString() };
       setLedgerAccounts((prev) =>
-        prev.map((a) => (a.id === acc.id ? updatedAcc : a))
+        prev.map((a) => (a.id === acc.id ? updatedAcc! : a))
       );
-      supabaseService.upsertLedgerAccount(updatedAcc).catch(err => console.error(err));
     }
 
     setLedgerEntries((prev) => prev.filter((e) => e.id !== entryId));
-    supabaseService.deleteLedgerEntry(entryId).catch(err => console.error(err));
-    showToast('Ledger entry deleted');
+
+    void (async () => {
+      let syncErrors = 0;
+      if (updatedAcc) {
+        try {
+          await supabaseService.upsertLedgerAccount(updatedAcc);
+        } catch (err) {
+          syncErrors++;
+          console.error('Failed updating ledger account on entry delete:', err);
+          enqueueRetry('upsertLedgerAccount', updatedAcc);
+        }
+      }
+      try {
+        await supabaseService.deleteLedgerEntry(entryId);
+      } catch (err) {
+        syncErrors++;
+        console.error('Failed deleting ledger entry remotely:', err);
+        enqueueRetry('deleteLedgerEntry', { id: entryId });
+      }
+      if (syncErrors > 0) {
+        showToast('Entry deleted locally — cloud sync failed & queued');
+      } else {
+        showToast('Ledger entry deleted');
+      }
+    })();
   };
 
   // Cashflow management
   const addCashflowRecord = (recordData: Omit<DailyCashflowRecord, 'id' | 'createdAt'>) => {
+    const cleanAmount = fromPaise(toPaise(recordData.amount));
     const newRecord: DailyCashflowRecord = {
       ...recordData,
-      id: `cf_${Date.now()}`,
+      amount: cleanAmount,
+      id: newId('cf'),
       createdAt: new Date().toISOString()
     };
     setDailyCashflows((prev) => [newRecord, ...prev]);
-    supabaseService.insertCashflowRecord(newRecord);
-    showToast(`Recorded ${newRecord.type}: ₹${newRecord.amount}`);
+
+    void (async () => {
+      try {
+        await supabaseService.insertCashflowRecord(newRecord);
+        showToast(`Recorded ${newRecord.type}: ₹${newRecord.amount.toFixed(2)}`);
+      } catch (err) {
+        console.error('Failed syncing cashflow record:', err);
+        enqueueRetry('upsertCashflow', newRecord);
+        showToast('Recorded locally — cloud sync failed & queued for retry');
+      }
+    })();
   };
 
   const deleteCashflowRecord = (id: string) => {
     setDailyCashflows((prev) => prev.filter((cf) => cf.id !== id));
-    supabaseService.deleteCashflowRecord(id);
-    showToast('Cashflow record deleted');
+    void (async () => {
+      try {
+        await supabaseService.deleteCashflowRecord(id);
+        showToast('Cashflow record deleted');
+      } catch (err) {
+        console.error('Failed deleting cashflow record remotely:', err);
+        enqueueRetry('deleteCashflow', { id });
+        showToast('Deleted locally — cloud delete failed & queued for retry');
+      }
+    })();
   };
 
   // Settings
@@ -1925,28 +2385,53 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const updateStoreBanner = async (url: string | null) => {
     setBannerUrl(url);
-    saveLocal("store_custom_banner", url);
-    await supabaseService.saveStoreProfile({ bannerUrl: url || '', updatedAt: Date.now() });
-    showToast("Store cover banner updated & synced!");
+    saveLocal('store_custom_banner', url);
+    const patch = { bannerUrl: url || '', updatedAt: Date.now() };
+    try {
+      await supabaseService.saveStoreProfile(patch);
+      showToast('Store cover banner updated & synced!');
+    } catch (err) {
+      console.error('Failed syncing store banner:', err);
+      enqueueRetry('saveStoreProfile', patch);
+      showToast('Banner updated locally — cloud sync failed & queued');
+      throw err;
+    }
   };
 
   const updateStoreLogo = async (url: string | null) => {
     setLogoUrl(url);
-    saveLocal("store_custom_logo", url);
+    saveLocal('store_custom_logo', url);
     if (url) {
       setShopProfile((prev) => ({ ...prev, logo: url }));
     }
-    await supabaseService.saveStoreProfile({ logoUrl: url || '', updatedAt: Date.now() });
-    showToast("Store logo updated & synced!");
+    const patch = { logoUrl: url || '', updatedAt: Date.now() };
+    try {
+      await supabaseService.saveStoreProfile(patch);
+      showToast('Store logo updated & synced!');
+    } catch (err) {
+      console.error('Failed syncing store logo:', err);
+      enqueueRetry('saveStoreProfile', patch);
+      showToast('Logo updated locally — cloud sync failed & queued');
+      throw err;
+    }
   };
 
   const selectLogo = (logoPath: string) => {
     setSelectedLogo(logoPath);
     setLogoUrl(logoPath);
-    saveLocal("store_custom_logo", logoPath);
+    saveLocal('store_custom_logo', logoPath);
     setShopProfile((prev) => ({ ...prev, logo: logoPath }));
-    supabaseService.saveStoreProfile({ logoUrl: logoPath, updatedAt: Date.now() });
-    showToast("Store logo updated");
+    const patch = { logoUrl: logoPath, updatedAt: Date.now() };
+    void (async () => {
+      try {
+        await supabaseService.saveStoreProfile(patch);
+        showToast('Store logo updated & synced');
+      } catch (err) {
+        console.error('Failed syncing selected logo:', err);
+        enqueueRetry('saveStoreProfile', patch);
+        showToast('Logo updated locally — cloud sync failed & queued');
+      }
+    })();
   };
 
   const clearTransactions = () => {
@@ -1955,7 +2440,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const resetToDemoData = () => {
-    refreshFromSupabase();
+    void refreshFromSupabase();
     showToast('Refreshed directly from Supabase database');
   };
 
@@ -1989,6 +2474,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       showToast('Data imported successfully!');
       return true;
     } catch (e) {
+      console.warn('Backup JSON parse error:', e);
       showToast('Failed to parse backup JSON');
       return false;
     }
@@ -2014,6 +2500,7 @@ export const StockProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         isRealtimeLive,
         refreshFromSupabase,
         isAuthed: authSnapshot.isAuthed,
+        isVerifyingSession: authSnapshot.isVerifyingSession,
         isAdmin: authSnapshot.isAdmin,
         currentUserEmail: authSnapshot.currentUserEmail,
         pendingVerificationEmail: authSnapshot.pendingVerificationEmail,

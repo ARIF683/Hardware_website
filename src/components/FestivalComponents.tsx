@@ -144,6 +144,7 @@ export const FestivalBannerCard: React.FC<{
           <img
             src={displayImg}
             alt={titleText}
+            loading="lazy"
             onError={() => setImgError(true)}
             className="absolute inset-0 w-full h-full object-cover"
           />

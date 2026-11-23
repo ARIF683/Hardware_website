@@ -15,7 +15,8 @@ import {
 } from 'lucide-react';
 import { useStock } from '../context/StockContext';
 import { BillRowData } from '../types';
-import { formatRupees } from '../utils/formatters';
+import { formatRupees, calcLineAmount, fromPaise, toPaise } from '../utils/formatters';
+import { newId } from '../services/supabaseService';
 import { COMMON_UNITS, getPairedUnit, convertQuantity } from '../utils/unitConversion';
 
 interface BillScreenProps {
@@ -63,7 +64,7 @@ export const BillScreen: React.FC<BillScreenProps> = ({ onBack, onOpenCalculator
     setRows((prev) => [
       ...prev,
       {
-        id: `row_${Date.now()}`,
+        id: newId('row'),
         name: '',
         rate: 0,
         qty: 1,
@@ -149,10 +150,11 @@ export const BillScreen: React.FC<BillScreenProps> = ({ onBack, onOpenCalculator
     includedRows = (Array.isArray(rows) ? rows : []).filter(
       (r) => r && r.include && typeof r.name === 'string' && r.name.trim().length > 0
     );
-    billTotal = includedRows.reduce(
-      (sum, r) => sum + safeNum(r.rate, 0) * safeNum(r.qty, 0),
+    const totalPaise = includedRows.reduce(
+      (sum, r) => sum + toPaise(calcLineAmount(safeNum(r.qty, 0), safeNum(r.rate, 0))),
       0
     );
+    billTotal = fromPaise(totalPaise);
   } catch (calcErr) {
     console.error('[Billing/Purchase] Failed calculating purchase bill total:', calcErr);
   }
@@ -471,7 +473,7 @@ export const BillScreen: React.FC<BillScreenProps> = ({ onBack, onOpenCalculator
                       {row.matchedItemId ? '✓ Linked to existing SKU' : '• Will create new SKU'}
                     </span>
                     <span className="font-bold text-slate-900 text-xs">
-                      Line Total: {formatRupees(safeNum(row.rate, 0) * safeNum(row.qty, 0))}
+                      Line Total: {formatRupees(calcLineAmount(safeNum(row.qty, 0), safeNum(row.rate, 0)))}
                     </span>
                   </div>
                 </div>

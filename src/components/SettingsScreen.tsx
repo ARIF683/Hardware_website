@@ -31,7 +31,13 @@ import {
 } from './AccountDialogs';
 import { useStock } from '../context/StockContext';
 import { ShopProfile } from '../types';
-import { SUPABASE_URL, SUPABASE_KEY, supabaseService, cleanSupabaseUrl } from '../services/supabaseService';
+import {
+  SUPABASE_URL,
+  SUPABASE_KEY,
+  supabaseService,
+  cleanSupabaseUrl,
+  isValidCustomSupabaseUrl
+} from '../services/supabaseService';
 import { FESTIVAL_MODE_CUSTOM, FESTIVAL_MODE_OFF, getEffectiveCustomFestivals } from '../utils/festivalStudio';
 
 export const SettingsScreen: React.FC = () => {
@@ -84,23 +90,28 @@ export const SettingsScreen: React.FC = () => {
     }
   }, [isAdmin]);
 
-  // Supabase live config
+  const isDev = import.meta.env.DEV;
+
+  // Supabase live config (custom override only active in DEV mode)
   const [supabaseUrl, setSupabaseUrl] = useState(
-    () => cleanSupabaseUrl(localStorage.getItem('hardware_supabase_url') || SUPABASE_URL)
+    () =>
+      isDev
+        ? cleanSupabaseUrl(localStorage.getItem('hardware_supabase_url') || SUPABASE_URL)
+        : SUPABASE_URL
   );
   const [supabaseKey, setSupabaseKey] = useState(
-    () => localStorage.getItem('hardware_supabase_key') || SUPABASE_KEY
+    () => (isDev ? localStorage.getItem('hardware_supabase_key') || SUPABASE_KEY : SUPABASE_KEY)
   );
   const [isSyncing, setIsSyncing] = useState(false);
 
   const availableLogos = [
     { id: 'stock_default', title: 'Classic Stock', path: '/logos/ic_stock_logo.png' },
-    { id: 'nano_banana', title: 'Nano Banana', path: '/logos/nano_banana_logo_1791185750609.jpg' },
-    { id: 'banana_tech', title: 'Banana Tech', path: '/logos/banana_tech_logo_1791185765354.jpg' },
-    { id: 'cyber_banana', title: 'Cyber Banana', path: '/logos/cyber_banana_logo_1791185780500.jpg' },
-    { id: 'option_a', title: 'Logo Style A', path: '/logos/img_logo_option_a_1791181143165.jpg' },
-    { id: 'option_b', title: 'Logo Style B', path: '/logos/img_logo_option_b_1791181156769.jpg' },
-    { id: 'option_c', title: 'Logo Style C', path: '/logos/img_logo_option_c_1791181173362.jpg' }
+    { id: 'nano_banana', title: 'Nano Banana', path: '/logos/nano_banana_logo_1791185750609.webp' },
+    { id: 'banana_tech', title: 'Banana Tech', path: '/logos/banana_tech_logo_1791185765354.webp' },
+    { id: 'cyber_banana', title: 'Cyber Banana', path: '/logos/cyber_banana_logo_1791185780500.webp' },
+    { id: 'option_a', title: 'Logo Style A', path: '/logos/img_logo_option_a_1791181143165.webp' },
+    { id: 'option_b', title: 'Logo Style B', path: '/logos/img_logo_option_b_1791181156769.webp' },
+    { id: 'option_c', title: 'Logo Style C', path: '/logos/img_logo_option_c_1791181173362.webp' }
   ];
 
   const handleProfileSubmit = (e: React.FormEvent) => {
@@ -136,22 +147,32 @@ export const SettingsScreen: React.FC = () => {
 
   const handleSaveSupabase = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isDev) return;
     const sanitizedUrl = cleanSupabaseUrl(supabaseUrl);
+    if (!isValidCustomSupabaseUrl(sanitizedUrl)) {
+      showToast('Invalid URL: Only HTTPS *.supabase.co URLs are allowed in dev mode.');
+      return;
+    }
     const sanitizedKey = (supabaseKey || '').trim().replace(/^Bearer\s+/i, '').replace(/^["']+|["']+$/g, '').trim();
     setSupabaseUrl(sanitizedUrl);
     setSupabaseKey(sanitizedKey);
-    localStorage.setItem('hardware_supabase_url', sanitizedUrl);
-    localStorage.setItem('hardware_supabase_key', sanitizedKey);
-    supabaseService.updateCredentials(sanitizedUrl, sanitizedKey);
-    await refreshFromSupabase();
-    showToast('Supabase settings saved and reconnected');
+    try {
+      supabaseService.updateCredentials(sanitizedUrl, sanitizedKey);
+      await refreshFromSupabase();
+      showToast('Dev Supabase settings saved and reconnected');
+    } catch (err: any) {
+      showToast(err?.message || 'Failed to update Supabase settings');
+    }
   };
 
   const handleResetDefaultSupabase = async () => {
+    if (!isDev) return;
     try {
       localStorage.removeItem('hardware_supabase_url');
       localStorage.removeItem('hardware_supabase_key');
-    } catch {}
+    } catch (e) {
+      console.warn('Could not clear dev Supabase overrides:', e);
+    }
     setSupabaseUrl(SUPABASE_URL);
     setSupabaseKey(SUPABASE_KEY);
     supabaseService.updateCredentials(SUPABASE_URL, SUPABASE_KEY);
@@ -482,6 +503,7 @@ export const SettingsScreen: React.FC = () => {
                   <img
                     src={lg.path}
                     alt={lg.title}
+                    loading="lazy"
                     className="w-full h-full object-cover"
                     onError={(e) => {
                       (e.target as HTMLElement).style.display = 'none';
@@ -681,49 +703,51 @@ export const SettingsScreen: React.FC = () => {
           </button>
         </div>
 
-        <form onSubmit={handleSaveSupabase} className="space-y-3 text-xs">
-          <div>
-            <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Supabase Project URL
-            </label>
-            <input
-              type="text"
-              value={supabaseUrl}
-              onChange={(e) => setSupabaseUrl(e.target.value)}
-              placeholder="https://xyz.supabase.co"
-              className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl font-mono text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-            />
-          </div>
+        {isDev && (
+          <form onSubmit={handleSaveSupabase} className="space-y-3 text-xs">
+            <div>
+              <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Dev Supabase Project URL (*.supabase.co)
+              </label>
+              <input
+                type="text"
+                value={supabaseUrl}
+                onChange={(e) => setSupabaseUrl(e.target.value)}
+                placeholder="https://xyz.supabase.co"
+                className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl font-mono text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              />
+            </div>
 
-          <div>
-            <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
-              Supabase Publishable / Anon Key
-            </label>
-            <input
-              type="password"
-              value={supabaseKey}
-              onChange={(e) => setSupabaseKey(e.target.value)}
-              placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
-              className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl font-mono text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-            />
-          </div>
+            <div>
+              <label className="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Dev Supabase Publishable / Anon Key
+              </label>
+              <input
+                type="password"
+                value={supabaseKey}
+                onChange={(e) => setSupabaseKey(e.target.value)}
+                placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
+                className="w-full px-3.5 py-2 bg-slate-50 border border-slate-300 rounded-xl font-mono text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              />
+            </div>
 
-          <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 pt-1">
-            <button
-              type="button"
-              onClick={handleResetDefaultSupabase}
-              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl transition-colors text-xs text-center"
-            >
-              Reset to Default Connection
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-colors text-center"
-            >
-              Save Credentials & Reconnect
-            </button>
-          </div>
-        </form>
+            <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={handleResetDefaultSupabase}
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl transition-colors text-xs text-center"
+              >
+                Reset to Default Connection
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-colors text-center"
+              >
+                Save Credentials & Reconnect
+              </button>
+            </div>
+          </form>
+        )}
       </div>
 
       {/* Color Machine Tint Integration */}

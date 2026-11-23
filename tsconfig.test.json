@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "types": ["node"],
+    "lib": ["ES2022"],
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "noEmit": false,
+    "outDir": ".test-dist",
+    "rootDir": "src"
+  },
+  "include": [
+    "src/types/index.ts",
+    "src/utils/unitConversion.ts",
+    "src/utils/formatters.ts",
+    "src/utils/colorMachineParser.ts",
+    "src/utils/__tests__/*.test.ts"
+  ]
+}

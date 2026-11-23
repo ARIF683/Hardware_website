@@ -1,9 +1,36 @@
-import { Item, TransactionRecord, DailyCashflowRecord, QuotationRecord, LedgerAccount, LedgerEntry, RemoteStoreProfile } from '../types';
+import {
+  Item,
+  TransactionRecord,
+  DailyCashflowRecord,
+  QuotationRecord,
+  LedgerAccount,
+  LedgerEntry,
+  RemoteStoreProfile,
+} from '../types';
 
-export const SUPABASE_URL = "https://xkjvcufajsyqbzjjllma.supabase.co";
-export const SUPABASE_KEY = "sb_publishable_sXokssWnrTPWROtmfHjoWA_LRqVPt8V";
+const ENV_URL =
+  typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL
+    ? String(import.meta.env.VITE_SUPABASE_URL)
+    : '';
+const ENV_KEY =
+  typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY
+    ? String(import.meta.env.VITE_SUPABASE_ANON_KEY)
+    : '';
+const IS_DEV = typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV);
 
-// Helper to sanitize any user-provided or stored Supabase URL
+export const SUPABASE_URL = 'https://xkjvcufajsyqbzjjllma.supabase.co';
+export const SUPABASE_KEY = 'sb_publishable_sXokssWnrTPWROtmfHjoWA_LRqVPt8V';
+
+export function isValidCustomSupabaseUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw.trim());
+    return u.protocol === 'https:' && u.hostname.endsWith('.supabase.co');
+  } catch {
+    return false;
+  }
+}
+
+// Helper to sanitize any Supabase URL
 export function cleanSupabaseUrl(raw?: string | null): string {
   if (!raw || typeof raw !== 'string') return SUPABASE_URL;
   let clean = raw.trim();
@@ -13,7 +40,6 @@ export function cleanSupabaseUrl(raw?: string | null): string {
   }
   try {
     const parsed = new URL(clean);
-    // Origin strictly retains protocol and host (e.g. https://xyz.supabase.co), stripping any paths or trailing slashes
     return parsed.origin;
   } catch {
     clean = clean.replace(/\/+$/, '');
@@ -24,31 +50,42 @@ export function cleanSupabaseUrl(raw?: string | null): string {
   }
 }
 
-// Helper to generate UUID for Supabase client_id
-function generateUUID(): string {
-  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+// Helper to generate cryptographically strong UUIDs for all record IDs
+export function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    const v = c === 'x' ? r : (r & 0x3) | 0x8;
-    return v.toString(16);
-  });
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  throw new Error('Secure random UUID generator is unavailable in this environment');
 }
 
-// Helper to compress image file using HTML5 canvas
-function compressImageFile(file: File, maxWidth = 600, maxHeight = 600, quality = 0.7): Promise<{ blob: Blob; dataUrl: string }> {
-  return new Promise((resolve) => {
+export const newId = (prefix: string): string => `${prefix}_${generateUUID()}`;
+
+// Helper to compress image file using HTML5 canvas (returns Blob only — never base64 fallback for DB)
+function compressImageFile(
+  file: File,
+  maxWidth = 800,
+  maxHeight = 800,
+  quality = 0.78
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => {
-      resolve({ blob: file, dataUrl: '' });
-    };
+    reader.onerror = () => reject(new Error('Failed to read image file'));
     reader.onload = (e) => {
-      const dataUrl = e.target?.result as string || '';
+      const dataUrl = (e.target?.result as string) || '';
+      if (!dataUrl) {
+        reject(new Error('Image file is empty'));
+        return;
+      }
       const img = new Image();
-      img.onerror = () => {
-        resolve({ blob: file, dataUrl });
-      };
+      img.onerror = () => resolve(file);
       img.onload = () => {
         let width = img.width;
         let height = img.height;
@@ -66,13 +103,13 @@ function compressImageFile(file: File, maxWidth = 600, maxHeight = 600, quality 
         canvas.height = height;
         const ctx = canvas.getContext('2d');
         if (!ctx) {
-          return resolve({ blob: file, dataUrl });
+          resolve(file);
+          return;
         }
         ctx.drawImage(img, 0, 0, width, height);
-        const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
         canvas.toBlob(
           (blob) => {
-            resolve({ blob: blob || file, dataUrl: compressedDataUrl });
+            resolve(blob || file);
           },
           'image/jpeg',
           quality
@@ -84,8 +121,8 @@ function compressImageFile(file: File, maxWidth = 600, maxHeight = 600, quality 
   });
 }
 
-export const PROFILE_CLIENT_ID = "00000000-0000-0000-0000-000000000001";
-export const PROFILE_SUPPLIER = "__STORE_PROFILE__";
+export const PROFILE_CLIENT_ID = '00000000-0000-0000-0000-000000000001';
+export const PROFILE_SUPPLIER = '__STORE_PROFILE__';
 
 function optPresentString(obj: any, key: string): string | null | undefined {
   if (!obj || typeof obj !== 'object') return undefined;
@@ -130,7 +167,7 @@ export const StoreProfileSyncCodec = {
       if (trimmed) {
         try {
           const parsed = JSON.parse(trimmed);
-          first = Array.isArray(parsed) ? (parsed[0] || null) : parsed;
+          first = Array.isArray(parsed) ? parsed[0] || null : parsed;
         } catch (e) {
           console.warn('StoreProfileSync: Failed parsing store profile JSON string', e);
         }
@@ -149,14 +186,22 @@ export const StoreProfileSyncCodec = {
     if (profile.storeName !== undefined && profile.storeName !== null) out.storeName = profile.storeName;
     if (profile.location !== undefined && profile.location !== null) out.location = profile.location;
     if (profile.roleTitle !== undefined && profile.roleTitle !== null) out.roleTitle = profile.roleTitle;
-    if (profile.supervisorName !== undefined && profile.supervisorName !== null) out.supervisorName = profile.supervisorName;
+    if (profile.supervisorName !== undefined && profile.supervisorName !== null) {
+      out.supervisorName = profile.supervisorName;
+    }
     if (profile.bankName !== undefined && profile.bankName !== null) out.bankName = profile.bankName;
-    if (profile.accountHolder !== undefined && profile.accountHolder !== null) out.accountHolder = profile.accountHolder;
-    if (profile.accountNumber !== undefined && profile.accountNumber !== null) out.accountNumber = profile.accountNumber;
+    if (profile.accountHolder !== undefined && profile.accountHolder !== null) {
+      out.accountHolder = profile.accountHolder;
+    }
+    if (profile.accountNumber !== undefined && profile.accountNumber !== null) {
+      out.accountNumber = profile.accountNumber;
+    }
     if (profile.ifscCode !== undefined && profile.ifscCode !== null) out.ifscCode = profile.ifscCode;
     if (profile.branchName !== undefined && profile.branchName !== null) out.branchName = profile.branchName;
     if (profile.upiId !== undefined && profile.upiId !== null) out.upiId = profile.upiId;
-    if (profile.signatureUrl !== undefined && profile.signatureUrl !== null) out.signatureUrl = profile.signatureUrl;
+    if (profile.signatureUrl !== undefined && profile.signatureUrl !== null) {
+      out.signatureUrl = profile.signatureUrl;
+    }
     if (profile.qrCodeUrl !== undefined && profile.qrCodeUrl !== null) out.qrCodeUrl = profile.qrCodeUrl;
     if (profile.festivalConfigJson !== undefined && profile.festivalConfigJson !== null) {
       out.festivalConfigJson = profile.festivalConfigJson;
@@ -172,7 +217,7 @@ export const StoreProfileSyncCodec = {
     return {
       client_id: PROFILE_CLIENT_ID,
       supplier: PROFILE_SUPPLIER,
-      bill_no: "CONFIG",
+      bill_no: 'CONFIG',
       bill_date: billDate,
       total: 0,
       lines: [this.toJsonObject(profile)],
@@ -187,63 +232,111 @@ export const StoreProfileSyncCodec = {
       storeName: override.storeName !== undefined ? override.storeName : base.storeName,
       location: override.location !== undefined ? override.location : base.location,
       roleTitle: override.roleTitle !== undefined ? override.roleTitle : base.roleTitle,
-      supervisorName: override.supervisorName !== undefined ? override.supervisorName : base.supervisorName,
+      supervisorName:
+        override.supervisorName !== undefined ? override.supervisorName : base.supervisorName,
       bankName: override.bankName !== undefined ? override.bankName : base.bankName,
-      accountHolder: override.accountHolder !== undefined ? override.accountHolder : base.accountHolder,
-      accountNumber: override.accountNumber !== undefined ? override.accountNumber : base.accountNumber,
+      accountHolder:
+        override.accountHolder !== undefined ? override.accountHolder : base.accountHolder,
+      accountNumber:
+        override.accountNumber !== undefined ? override.accountNumber : base.accountNumber,
       ifscCode: override.ifscCode !== undefined ? override.ifscCode : base.ifscCode,
       branchName: override.branchName !== undefined ? override.branchName : base.branchName,
       upiId: override.upiId !== undefined ? override.upiId : base.upiId,
       signatureUrl: override.signatureUrl !== undefined ? override.signatureUrl : base.signatureUrl,
       qrCodeUrl: override.qrCodeUrl !== undefined ? override.qrCodeUrl : base.qrCodeUrl,
       festivalConfigJson:
-        override.festivalConfigJson !== undefined ? override.festivalConfigJson : base.festivalConfigJson,
-      userRolesJson: override.userRolesJson !== undefined ? override.userRolesJson : base.userRolesJson,
+        override.festivalConfigJson !== undefined
+          ? override.festivalConfigJson
+          : base.festivalConfigJson,
+      userRolesJson:
+        override.userRolesJson !== undefined ? override.userRolesJson : base.userRolesJson,
       updatedAt: Math.max(Number(base.updatedAt || 0), Number(override.updatedAt || 0)) || Date.now(),
     };
   },
 };
 
+export interface SupabaseAuthHandlers {
+  getAccessToken: () => string;
+  refreshSession: () => Promise<boolean>;
+  onAuthExpired: (reason?: string) => void;
+}
+
 class SupabaseService {
   private url: string;
   private key: string;
   private ws: WebSocket | null = null;
-  private heartbeatInterval: any = null;
-  private reconnectTimeout: any = null;
+  private wsAccessToken = '';
+  private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+  private reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
   private currentListener: any = null;
   private isExplicitlyClosed = false;
   private accessTokenProvider: (() => string) | null = null;
+  private refreshSessionHandler: (() => Promise<boolean>) | null = null;
+  private onAuthExpiredHandler: ((reason?: string) => void) | null = null;
 
   constructor() {
-    const envUrl = typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL;
-    const envKey = typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_ANON_KEY;
-    const defaultUrl = cleanSupabaseUrl(envUrl || SUPABASE_URL);
-    const defaultKey = (envKey && envKey.trim()) ? envKey.trim() : SUPABASE_KEY;
+    const defaultUrl = cleanSupabaseUrl(ENV_URL || SUPABASE_URL);
+    const defaultKey = ENV_KEY && ENV_KEY.trim() ? ENV_KEY.trim() : SUPABASE_KEY;
 
-    const storedUrl = typeof localStorage !== 'undefined' ? localStorage.getItem('hardware_supabase_url') : null;
-    const storedKey = typeof localStorage !== 'undefined' ? localStorage.getItem('hardware_supabase_key') : null;
-    
-    // Auto-repair any stored URL in localStorage
-    this.url = cleanSupabaseUrl(storedUrl || defaultUrl);
-    if (storedUrl && storedUrl !== this.url) {
-      try { localStorage.setItem('hardware_supabase_url', this.url); } catch {}
+    // Only allow custom server settings in DEV mode and strictly over HTTPS *.supabase.co
+    if (IS_DEV && typeof localStorage !== 'undefined') {
+      try {
+        const storedUrl = localStorage.getItem('hardware_supabase_url');
+        const storedKey = localStorage.getItem('hardware_supabase_key');
+        if (storedUrl && isValidCustomSupabaseUrl(storedUrl)) {
+          this.url = cleanSupabaseUrl(storedUrl);
+          this.key = storedKey && storedKey.trim().length > 10 ? storedKey.trim() : defaultKey;
+          return;
+        }
+      } catch (e) {
+        console.warn('Could not read dev Supabase URL:', e);
+      }
+    } else if (typeof localStorage !== 'undefined') {
+      try {
+        localStorage.removeItem('hardware_supabase_url');
+        localStorage.removeItem('hardware_supabase_key');
+      } catch (e) {
+        console.warn('Could not purge legacy Supabase credentials:', e);
+      }
     }
-    this.key = (storedKey && storedKey.trim().length > 10) ? storedKey.trim() : defaultKey;
+
+    this.url = defaultUrl;
+    this.key = defaultKey;
   }
 
   public setAccessTokenProvider(provider: (() => string) | null) {
     this.accessTokenProvider = provider;
   }
 
+  public setAuthHandlers(handlers: SupabaseAuthHandlers) {
+    this.accessTokenProvider = handlers.getAccessToken;
+    this.refreshSessionHandler = handlers.refreshSession;
+    this.onAuthExpiredHandler = handlers.onAuthExpired;
+  }
+
+  // Dev-only custom override strictly constrained to HTTPS *.supabase.co
   public updateCredentials(url: string, key: string) {
-    this.url = cleanSupabaseUrl(url);
-    const cleanK = (key || '').trim().replace(/^Bearer\s+/i, '').replace(/^["']+|["']+$/g, '').trim();
-    this.key = (cleanK && cleanK.length > 10) ? cleanK : SUPABASE_KEY;
+    if (!IS_DEV) {
+      throw new Error('Custom Supabase server overrides are disabled in production builds.');
+    }
+    const cleanUrl = cleanSupabaseUrl(url);
+    if (!isValidCustomSupabaseUrl(cleanUrl)) {
+      throw new Error('Only HTTPS *.supabase.co project URLs are allowed.');
+    }
+    this.url = cleanUrl;
+    const cleanK = (key || '')
+      .trim()
+      .replace(/^Bearer\s+/i, '')
+      .replace(/^["']+|["']+$/g, '')
+      .trim();
+    this.key = cleanK && cleanK.length > 10 ? cleanK : SUPABASE_KEY;
     if (typeof localStorage !== 'undefined') {
       try {
         localStorage.setItem('hardware_supabase_url', this.url);
         localStorage.setItem('hardware_supabase_key', this.key);
-      } catch {}
+      } catch (e) {
+        console.warn('Failed storing dev Supabase credentials:', e);
+      }
     }
     if (this.currentListener) {
       this.connectRealtime(this.currentListener);
@@ -264,51 +357,82 @@ class SupabaseService {
     return cleanSupabaseUrl(this.url);
   }
 
-  private getActiveBearer(): string {
-    const token = this.accessTokenProvider ? (this.accessTokenProvider() || '').trim() : '';
-    return token || this.getCleanKey();
+  private getUserToken(): string {
+    return this.accessTokenProvider ? (this.accessTokenProvider() || '').trim() : '';
   }
 
-  public getHeaders(isMutation = false): HeadersInit {
-    const cleanKey = this.getCleanKey();
-    const bearer = this.getActiveBearer();
-    const headers: Record<string, string> = {
-      'apikey': cleanKey,
-      'Authorization': `Bearer ${bearer}`
-    };
-    if (isMutation) {
-      headers['Content-Type'] = 'application/json';
+  private getActiveBearer(): string {
+    return this.getUserToken();
+  }
+
+  private buildHeaders(token: string, isMutation = false, extra?: HeadersInit): Headers {
+    const headers = new Headers(extra);
+    headers.set('apikey', this.getCleanKey());
+    headers.set('Authorization', `Bearer ${token}`);
+    if (isMutation && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
     }
     return headers;
   }
 
-  // Broadcast a real-time event across all open tabs/devices on the same Supabase project
-  public broadcastChange(table: string, type: 'INSERT' | 'UPDATE' | 'DELETE', record: any) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      try {
-        this.ws.send(JSON.stringify({
-          topic: `realtime:public:${table}`,
-          event: "broadcast",
-          payload: {
-            type: "broadcast",
-            event: "db_change",
-            table,
-            data: {
-              type,
-              table,
-              record,
-              new: record
-            }
-          },
-          ref: `bc_${Date.now()}`
-        }));
-      } catch (e) {
-        console.warn('Realtime broadcast notice:', e);
+  private async authorizedFetch(
+    url: string,
+    init: RequestInit = {},
+    isMutation = false
+  ): Promise<Response> {
+    let token = this.getActiveBearer();
+    if (!token) {
+      this.onAuthExpiredHandler?.('Please sign in to access store data.');
+      throw new Error('Authentication required. Please sign in.');
+    }
+
+    let resp = await fetch(url, {
+      ...init,
+      headers: this.buildHeaders(token, isMutation, init.headers),
+    });
+
+    if (resp.status === 401 && this.refreshSessionHandler) {
+      const refreshed = await this.refreshSessionHandler();
+      if (refreshed) {
+        token = this.getActiveBearer();
+        if (token) {
+          resp = await fetch(url, {
+            ...init,
+            headers: this.buildHeaders(token, isMutation, init.headers),
+          });
+        }
       }
+      if (resp.status === 401) {
+        this.onAuthExpiredHandler?.('Your session has expired. Please sign in again.');
+        throw new Error('Session expired. Please sign in again.');
+      }
+    }
+
+    return resp;
+  }
+
+  private async assertOk(resp: Response, action: string): Promise<Response> {
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => resp.statusText);
+      throw new Error(`${action} failed: ${resp.status} ${detail}`);
+    }
+    return resp;
+  }
+
+  // Reconnect active WebSocket with fresh access token when session refreshes
+  public reconnectRealtimeIfNeeded() {
+    if (!this.currentListener || this.isExplicitlyClosed) return;
+    const latestToken = this.getActiveBearer();
+    if (!latestToken) {
+      this.disconnectRealtime();
+      return;
+    }
+    if (latestToken !== this.wsAccessToken) {
+      this.connectRealtime(this.currentListener);
     }
   }
 
-  // --- Realtime WebSocket Channel Listener ---
+  // --- Realtime WebSocket Channel Listener (postgres_changes only; broadcasts rejected) ---
   public connectRealtime(listener: any) {
     this.currentListener = listener;
     this.isExplicitlyClosed = false;
@@ -319,52 +443,75 @@ class SupabaseService {
     }
 
     if (this.ws) {
-      try { this.ws.close(); } catch {}
+      try {
+        this.ws.close();
+      } catch (e) {
+        console.warn('Realtime WS close notice:', e);
+      }
       this.ws = null;
     }
 
+    const token = this.getActiveBearer();
+    if (!token) {
+      this.wsAccessToken = '';
+      return;
+    }
+
     try {
+      this.wsAccessToken = token;
       const cleanUrl = this.getCleanUrl();
       const cleanKey = this.getCleanKey();
-      const wsUrl = `${cleanUrl.replace(/^http/, "ws")}/realtime/v1/websocket?apikey=${cleanKey}&vsn=1.0.0`;
+      const wsUrl = `${cleanUrl.replace(/^http/, 'ws')}/realtime/v1/websocket?apikey=${cleanKey}&vsn=1.0.0`;
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
-        // Join realtime broadcast channels for all tables
-        const tables = ["items", "purchases", "daily_cashflow", "quotations", "ledger_accounts", "ledger_entries"];
-        tables.forEach(table => {
-          this.ws?.send(JSON.stringify({
-            topic: `realtime:public:${table}`,
-            event: "phx_join",
-            payload: {
-              config: {
-                broadcast: { self: false },
-                presence: { key: "" },
-                postgres_changes: [{ event: "*", schema: "public", table }]
-              }
-            },
-            ref: `join_${table}_${Date.now()}`
-          }));
+        const joinToken = this.getActiveBearer() || token;
+        const tables = [
+          'items',
+          'purchases',
+          'daily_cashflow',
+          'quotations',
+          'ledger_accounts',
+          'ledger_entries',
+        ];
+        tables.forEach((table) => {
+          this.ws?.send(
+            JSON.stringify({
+              topic: `realtime:public:${table}`,
+              event: 'phx_join',
+              payload: {
+                access_token: joinToken,
+                config: {
+                  broadcast: { self: false },
+                  presence: { key: '' },
+                  postgres_changes: [{ event: '*', schema: 'public', table }],
+                },
+              },
+              ref: `join_${table}_${Date.now()}`,
+            })
+          );
         });
 
-        // Also join general public topic
-        this.ws?.send(JSON.stringify({
-          topic: "realtime:public",
-          event: "phx_join",
-          payload: {},
-          ref: "public_1"
-        }));
+        this.ws?.send(
+          JSON.stringify({
+            topic: 'realtime:public',
+            event: 'phx_join',
+            payload: { access_token: joinToken },
+            ref: 'public_1',
+          })
+        );
 
-        // Keepalive heartbeat
-        clearInterval(this.heartbeatInterval);
+        if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
         this.heartbeatInterval = setInterval(() => {
           if (this.ws?.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({
-              topic: "phoenix",
-              event: "heartbeat",
-              payload: {},
-              ref: "hb"
-            }));
+            this.ws.send(
+              JSON.stringify({
+                topic: 'phoenix',
+                event: 'heartbeat',
+                payload: {},
+                ref: 'hb',
+              })
+            );
           }
         }, 25000);
       };
@@ -372,95 +519,121 @@ class SupabaseService {
       this.ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          if (msg.event === "phx_reply" || msg.event === "system") return;
+          if (
+            msg.event === 'phx_reply' ||
+            msg.event === 'system' ||
+            msg.event === 'phx_error' ||
+            msg.event === 'presence_state' ||
+            msg.event === 'presence_diff'
+          ) {
+            return;
+          }
 
           const payload = msg.payload;
-          const topic = msg.topic || "";
+
+          // SECURITY: Reject ALL unauthenticated/forged broadcast messages; accept postgres_changes only
+          if (msg.event === 'broadcast' || payload?.type === 'broadcast') {
+            return;
+          }
+          if (msg.event !== 'postgres_changes') {
+            return;
+          }
+
+          const topic = msg.topic || '';
           const data = payload?.data;
+          if (!data || typeof data !== 'object') return;
 
-          // Support both postgres_changes and Phoenix broadcast
-          const isBroadcast = msg.event === "broadcast" || payload?.type === "broadcast";
-          const record = data?.record || payload?.record || payload?.new || msg.record || data?.new;
-          const oldRecord = data?.old_record || payload?.old_record || payload?.old || msg.old_record;
-          const rawType = data?.type || payload?.type || (isBroadcast ? (data?.type || "UPDATE") : (msg.event !== "postgres_changes" ? msg.event : "UPDATE"));
-          const evtType = String(rawType || "UPDATE").toUpperCase();
-          const table = String(data?.table || payload?.table || topic.split(":")[2] || "").toLowerCase();
+          const record = data.record || null;
+          const oldRecord = data.old_record || null;
+          const evtType = String(data.type || 'UPDATE').toUpperCase();
+          const table = String(data.table || topic.split(':')[2] || '').toLowerCase();
 
-          // Ensure DELETE record carries the id from oldRecord if record is empty
           const effectiveRecord = record || (oldRecord ? { id: oldRecord.id } : null);
           const effectiveId = effectiveRecord?.id || oldRecord?.id;
 
-          if (topic.includes("purchases") || table === "purchases" || effectiveRecord?.supplier === PROFILE_SUPPLIER || effectiveRecord?.client_id === PROFILE_CLIENT_ID) {
-            const clientId = effectiveRecord?.client_id;
-            const supplier = effectiveRecord?.supplier;
+          if (table === 'purchases' || topic.includes('purchases')) {
+            const clientId = effectiveRecord?.client_id || oldRecord?.client_id;
+            const supplier = effectiveRecord?.supplier || oldRecord?.supplier;
             if (clientId === PROFILE_CLIENT_ID || supplier === PROFILE_SUPPLIER) {
-              const parsedProfile = StoreProfileSyncCodec.parseFromLines(effectiveRecord?.lines);
-              if (parsedProfile && listener && typeof listener.onStoreProfileChanged === "function") {
-                listener.onStoreProfileChanged(parsedProfile);
+              // SECURITY: Never apply pushed WS payload for store profile — always re-fetch via authenticated REST
+              if (listener && typeof listener.onStoreProfileChanged === 'function') {
+                void this.fetchStoreProfile()
+                  .then((freshProfile) => {
+                    if (freshProfile && typeof listener.onStoreProfileChanged === 'function') {
+                      listener.onStoreProfileChanged(freshProfile);
+                    }
+                  })
+                  .catch((err) => {
+                    console.warn('Failed re-fetching store profile after realtime trigger:', err);
+                  });
               }
             }
           }
 
-          if (typeof listener === "function") {
-            listener(msg.payload || msg);
-          } else if (listener && typeof listener === "object") {
-            if (table === "items" || topic.includes("items") || (!table && effectiveRecord?.name !== undefined)) {
-              if (typeof listener.onItemChanged === "function") {
+          if (listener && typeof listener === 'object') {
+            if (table === 'items') {
+              if (typeof listener.onItemChanged === 'function') {
                 listener.onItemChanged(evtType, effectiveRecord, effectiveId);
               }
-            } else if (table === "daily_cashflow" || topic.includes("daily_cashflow")) {
-              if (typeof listener.onCashflowChanged === "function") {
+            } else if (table === 'daily_cashflow') {
+              if (typeof listener.onCashflowChanged === 'function') {
                 listener.onCashflowChanged(evtType, effectiveRecord, effectiveId);
               }
-            } else if (table === "quotations" || topic.includes("quotations")) {
-              if (typeof listener.onQuotationChanged === "function") {
+            } else if (table === 'quotations') {
+              if (typeof listener.onQuotationChanged === 'function') {
                 listener.onQuotationChanged(evtType, effectiveRecord, effectiveId);
               }
-            } else if (table === "ledger_accounts" || topic.includes("ledger_accounts")) {
-              if (typeof listener.onLedgerAccountChanged === "function") {
+            } else if (table === 'ledger_accounts') {
+              if (typeof listener.onLedgerAccountChanged === 'function') {
                 listener.onLedgerAccountChanged(evtType, effectiveRecord, effectiveId);
               }
-            } else if (table === "ledger_entries" || topic.includes("ledger_entries")) {
-              if (typeof listener.onLedgerEntryChanged === "function") {
+            } else if (table === 'ledger_entries') {
+              if (typeof listener.onLedgerEntryChanged === 'function') {
                 listener.onLedgerEntryChanged(evtType, effectiveRecord, effectiveId);
               }
             }
           }
         } catch (e) {
-          console.error("Realtime parsing error", e);
+          console.error('Realtime parsing error', e);
         }
       };
 
       this.ws.onerror = (err) => {
-        console.warn("Realtime WS notice", err);
+        console.warn('Realtime WS notice', err);
       };
 
       this.ws.onclose = () => {
-        clearInterval(this.heartbeatInterval);
-        // Automatic reconnection if not explicitly closed
-        if (!this.isExplicitlyClosed) {
+        if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+        if (!this.isExplicitlyClosed && this.getActiveBearer()) {
           this.reconnectTimeout = setTimeout(() => {
-            if (!this.isExplicitlyClosed && this.currentListener) {
-              console.log("Reconnecting Supabase Realtime WebSocket...");
+            if (!this.isExplicitlyClosed && this.currentListener && this.getActiveBearer()) {
               this.connectRealtime(this.currentListener);
             }
           }, 3500);
         }
       };
     } catch (e) {
-      console.warn("Notice: Realtime WebSocket unavailable", e);
+      console.warn('Notice: Realtime WebSocket unavailable', e);
     }
   }
 
   public disconnectRealtime() {
     this.isExplicitlyClosed = true;
-    clearInterval(this.heartbeatInterval);
+    this.wsAccessToken = '';
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
       this.reconnectTimeout = null;
     }
     if (this.ws) {
-      try { this.ws.close(); } catch {}
+      try {
+        this.ws.close();
+      } catch (e) {
+        console.warn('Realtime disconnect notice:', e);
+      }
       this.ws = null;
     }
   }
@@ -468,12 +641,10 @@ class SupabaseService {
   // --- Store Profile Sync (Banner, Avatar, Festival Studio & User Roles) ---
   public async fetchStoreProfile(): Promise<RemoteStoreProfile | null> {
     try {
-      const resp = await fetch(
+      const resp = await this.authorizedFetch(
         `${this.getCleanUrl()}/rest/v1/purchases?client_id=eq.${PROFILE_CLIENT_ID}&limit=1`,
-        {
-          method: "GET",
-          headers: this.getHeaders(false)
-        }
+        { method: 'GET' },
+        false
       );
       if (!resp.ok) return null;
       const list = await resp.json();
@@ -482,7 +653,7 @@ class SupabaseService {
       }
       return null;
     } catch (e) {
-      console.warn("Notice: Store profile fetch skipped (network/offline):", e);
+      console.warn('Notice: Store profile fetch skipped:', e);
       return null;
     }
   }
@@ -491,77 +662,70 @@ class SupabaseService {
     patchOrBannerUrl: Partial<RemoteStoreProfile> | string | null,
     legacyLogoUrl?: string | null
   ): Promise<boolean> {
-    try {
-      const patch: RemoteStoreProfile =
-        typeof patchOrBannerUrl === 'object' && patchOrBannerUrl !== null
-          ? {
-              ...patchOrBannerUrl,
-              updatedAt: patchOrBannerUrl.updatedAt || Date.now(),
-            }
-          : {
-              bannerUrl: patchOrBannerUrl ?? '',
-              logoUrl: legacyLogoUrl ?? '',
-              updatedAt: Date.now(),
-            };
+    const patch: RemoteStoreProfile =
+      typeof patchOrBannerUrl === 'object' && patchOrBannerUrl !== null
+        ? {
+            ...patchOrBannerUrl,
+            updatedAt: patchOrBannerUrl.updatedAt || Date.now(),
+          }
+        : {
+            bannerUrl: patchOrBannerUrl ?? '',
+            logoUrl: legacyLogoUrl ?? '',
+            updatedAt: Date.now(),
+          };
 
-      const existing = await this.fetchStoreProfile();
-      const merged = StoreProfileSyncCodec.merge(existing, patch);
-      const payload = StoreProfileSyncCodec.toPurchasesPayload(merged);
+    const existing = await this.fetchStoreProfile();
+    const merged = StoreProfileSyncCodec.merge(existing, patch);
+    const payload = StoreProfileSyncCodec.toPurchasesPayload(merged);
 
-      const resp = await fetch(`${this.getCleanUrl()}/rest/v1/purchases?on_conflict=client_id`, {
-        method: "POST",
-        headers: {
-          ...this.getHeaders(true),
-          Prefer: "resolution=merge-duplicates,return=representation"
-        },
-        body: JSON.stringify(payload)
-      });
-      if (!resp.ok) {
-        const err = await resp.text();
-        console.error("Failed to save store profile to Supabase:", err);
-        return false;
-      } else {
-        console.log("Successfully saved store profile to Supabase");
-        this.broadcastChange('purchases', 'UPDATE', payload);
-        return true;
-      }
-    } catch (e) {
-      console.error("saveStoreProfile error:", e);
-      return false;
-    }
-  }
-
-  // Upload image to Cloudinary using Supabase Edge Function signature with client-side canvas fallback
-  public async uploadImageToCloudinary(file: File): Promise<string> {
-    let compressedDataUrl = '';
-    let uploadBlob: Blob = file;
-
-    try {
-      const compressed = await compressImageFile(file, 600, 600, 0.7);
-      uploadBlob = compressed.blob;
-      compressedDataUrl = compressed.dataUrl;
-    } catch (e) {
-      console.warn('Canvas compression error:', e);
-    }
-
-    try {
-      // Direct CORS-safe call to edge function without 'Prefer' header
-      const signResp = await fetch(`${this.getCleanUrl()}/functions/v1/sign-cloudinary-upload`, {
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/purchases?on_conflict=client_id`,
+      {
         method: 'POST',
         headers: {
-          'apikey': this.getCleanKey(),
-          'Authorization': `Bearer ${this.getCleanKey()}`,
-          'Content-Type': 'application/json'
+          Prefer: 'resolution=merge-duplicates,return=representation',
         },
-        body: JSON.stringify({ folder: 'items' })
-      });
+        body: JSON.stringify(payload),
+      },
+      true
+    );
+    await this.assertOk(resp, 'Save store profile');
+    return true;
+  }
 
-      if (!signResp.ok) {
-        throw new Error(`Edge function signing error: ${await signResp.text()}`);
-      }
+  // Upload image to Cloudinary via authenticated Edge Function signature (strictly no anon key, no base64 fallback)
+  public async uploadImageToCloudinary(file: File): Promise<string> {
+    if (!this.getActiveBearer()) {
+      throw new Error('Please sign in before uploading images.');
+    }
+    if (!file || !file.type.startsWith('image/')) {
+      throw new Error('Please select a valid image file.');
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      throw new Error('Image file is too large (max 10 MB).');
+    }
+
+    let uploadBlob: Blob;
+    try {
+      uploadBlob = await compressImageFile(file, 800, 800, 0.78);
+    } catch (e) {
+      console.warn('Image compression warning, using original file:', e);
+      uploadBlob = file;
+    }
+
+    try {
+      const signResp = await this.authorizedFetch(
+        `${this.getCleanUrl()}/functions/v1/sign-cloudinary-upload`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ folder: 'items' }),
+        },
+        true
+      );
+      await this.assertOk(signResp, 'Cloudinary signature request');
 
       const { signature, timestamp, apiKey, cloudName, folder } = await signResp.json();
-      if (!signature || !cloudName) {
+      if (!signature || !cloudName || !apiKey) {
         throw new Error('Incomplete response from signature edge function');
       }
 
@@ -572,75 +736,48 @@ class SupabaseService {
       formData.append('signature', signature);
       formData.append('folder', folder || 'items');
 
-      const uploadResp = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
-        method: 'POST',
-        body: formData
-      });
-
-      if (!uploadResp.ok) {
-        throw new Error(`Cloudinary upload failed: ${await uploadResp.text()}`);
-      }
+      const uploadResp = await fetch(
+        `https://api.cloudinary.com/v1_1/${encodeURIComponent(cloudName)}/image/upload`,
+        {
+          method: 'POST',
+          body: formData,
+        }
+      );
+      await this.assertOk(uploadResp, 'Cloudinary image upload');
 
       const data = await uploadResp.json();
-      return data.secure_url || data.url || compressedDataUrl;
-    } catch (e) {
-      console.warn('Cloudinary upload network error, falling back to local compressed image:', e);
-      if (compressedDataUrl) {
-        return compressedDataUrl;
+      const secureUrl = data?.secure_url || data?.url;
+      if (!secureUrl || typeof secureUrl !== 'string') {
+        throw new Error('Cloudinary did not return an image URL');
       }
-      const fallback = await compressImageFile(file, 600, 600, 0.7);
-      return fallback.dataUrl;
+      return secureUrl;
+    } catch (e: any) {
+      console.error('Image upload failed:', e);
+      if (
+        typeof e?.message === 'string' &&
+        (e.message.includes('Please sign in') || e.message.includes('Session expired'))
+      ) {
+        throw e;
+      }
+      throw new Error('Image upload failed, please retry');
     }
   }
 
   // --- Items REST API ---
-  public async fetchAllItems(): Promise<Item[]> { return this.fetchItems(); }
+  public async fetchAllItems(): Promise<Item[]> {
+    return this.fetchItems();
+  }
+
   public async fetchItems(): Promise<Item[]> {
-    try {
-      const resp = await fetch(`${this.getCleanUrl()}/rest/v1/items?select=*&order=name.asc`, {
-        method: 'GET',
-        headers: this.getHeaders(false)
-      });
-      if (resp.ok) {
-        const rows = await resp.json();
-        return rows.map((r: any) => this.mapItemRow(r));
-      }
-      // If 401/403 with custom key, fall back to default credentials
-      if ((resp.status === 401 || resp.status === 403) && this.getCleanKey() !== SUPABASE_KEY) {
-        console.warn('Custom Supabase credentials rejected (401/403). Falling back to default project credentials.');
-        const retry = await fetch(`${SUPABASE_URL}/rest/v1/items?select=*&order=name.asc`, {
-          method: 'GET',
-          headers: {
-            'apikey': SUPABASE_KEY,
-            'Authorization': `Bearer ${SUPABASE_KEY}`
-          }
-        });
-        if (retry.ok) {
-          const rows = await retry.json();
-          this.updateCredentials(SUPABASE_URL, SUPABASE_KEY);
-          return rows.map((r: any) => this.mapItemRow(r));
-        }
-      }
-      throw new Error(`Fetch items failed: ${resp.status} ${resp.statusText}`);
-    } catch (err: any) {
-      if (this.getCleanKey() !== SUPABASE_KEY || this.getCleanUrl() !== SUPABASE_URL) {
-        try {
-          const retry = await fetch(`${SUPABASE_URL}/rest/v1/items?select=*&order=name.asc`, {
-            method: 'GET',
-            headers: {
-              'apikey': SUPABASE_KEY,
-              'Authorization': `Bearer ${SUPABASE_KEY}`
-            }
-          });
-          if (retry.ok) {
-            const rows = await retry.json();
-            this.updateCredentials(SUPABASE_URL, SUPABASE_KEY);
-            return rows.map((r: any) => this.mapItemRow(r));
-          }
-        } catch {}
-      }
-      throw err;
-    }
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/items?select=*&order=name.asc`,
+      { method: 'GET' },
+      false
+    );
+    await this.assertOk(resp, 'Fetch items');
+    const rows = await resp.json();
+    if (!Array.isArray(rows)) return [];
+    return rows.map((r: any) => this.mapItemRow(r));
   }
 
   private mapItemRow(r: any): Item {
@@ -661,33 +798,68 @@ class SupabaseService {
       mrp: r.mrp !== null && r.mrp !== undefined && r.mrp !== '' ? Number(r.mrp) : null,
       imageUrl: r.image_url || undefined,
       aliases: r.aliases || '',
-      updatedAt: r.updated_at || new Date().toISOString()
+      updatedAt: r.updated_at || new Date().toISOString(),
     };
   }
 
   public async updateItemImage(id: string, imageUrl: string | null): Promise<void> {
     const cleanId = (id || '').trim();
-    const resp = await fetch(`${this.getCleanUrl()}/rest/v1/items?id=eq.${encodeURIComponent(cleanId)}`, {
-      method: 'PATCH',
-      headers: {
-        ...this.getHeaders(true),
-        'Prefer': 'return=representation'
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/items?id=eq.${encodeURIComponent(cleanId)}`,
+      {
+        method: 'PATCH',
+        headers: {
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify({
+          image_url: imageUrl,
+          updated_at: new Date().toISOString(),
+        }),
       },
-      body: JSON.stringify({
-        image_url: imageUrl,
-        updated_at: new Date().toISOString()
-      })
-    });
-    if (!resp.ok) {
-      const err = await resp.text();
-      console.warn('Update item image notice:', err);
-      throw new Error(`Failed to update item image: ${err}`);
-    }
+      true
+    );
+    await this.assertOk(resp, 'Update item image');
     const data = await resp.json();
     if (!data || data.length === 0) {
-      throw new Error(`Item with id ${id} not found in database`);
+      throw new Error(`Item with id ${cleanId} not found in database`);
     }
-    this.broadcastChange('items', 'UPDATE', { id: cleanId, image_url: imageUrl, updated_at: new Date().toISOString() });
+  }
+
+  public async updateItemMetadata(
+    id: string,
+    patch: Partial<{
+      name: string;
+      code: string;
+      barcode: string;
+      type: string;
+      brand: string;
+      size: string;
+      unit: string;
+      low: number;
+      cost: number;
+      price: number;
+      mrp: number | null;
+      image_url: string | null;
+      aliases: string;
+      updated_at: string;
+    }>
+  ): Promise<void> {
+    const cleanId = (id || '').trim();
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/items?id=eq.${encodeURIComponent(cleanId)}`,
+      {
+        method: 'PATCH',
+        headers: {
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify({
+          ...patch,
+          updated_at: patch.updated_at || new Date().toISOString(),
+        }),
+      },
+      true
+    );
+    await this.assertOk(resp, 'Update item details');
   }
 
   public async upsertItem(item: Item): Promise<void> {
@@ -708,91 +880,92 @@ class SupabaseService {
       mrp: item.mrp || null,
       image_url: item.imageUrl || null,
       aliases: item.aliases || '',
-      updated_at: item.updatedAt || new Date().toISOString()
+      updated_at: item.updatedAt || new Date().toISOString(),
     };
 
-    // 1. First try PATCH by ID
-    const patchResp = await fetch(`${this.getCleanUrl()}/rest/v1/items?id=eq.${encodeURIComponent(cleanId)}`, {
-      method: 'PATCH',
-      headers: {
-        ...this.getHeaders(true),
-        'Prefer': 'return=representation'
+    const patchResp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/items?id=eq.${encodeURIComponent(cleanId)}`,
+      {
+        method: 'PATCH',
+        headers: {
+          Prefer: 'return=representation',
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload)
-    });
-
-    if (patchResp.ok) {
-      const data = await patchResp.json();
-      if (data && data.length > 0) {
-        this.broadcastChange('items', 'UPDATE', payload);
-        return; // Successfully updated
-      }
+      true
+    );
+    await this.assertOk(patchResp, 'Update item');
+    const patchedData = await patchResp.json();
+    if (Array.isArray(patchedData) && patchedData.length > 0) {
+      return;
     }
 
-    // 2. If row was not found, perform POST with on_conflict=id
-    const postResp = await fetch(`${this.getCleanUrl()}/rest/v1/items?on_conflict=id`, {
-      method: 'POST',
-      headers: {
-        ...this.getHeaders(true),
-        'Prefer': 'resolution=merge-duplicates,return=representation'
+    const postResp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/items?on_conflict=id`,
+      {
+        method: 'POST',
+        headers: {
+          Prefer: 'resolution=merge-duplicates,return=representation',
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload)
-    });
-
-    if (!postResp.ok) {
-      const err = await postResp.text();
-      console.warn('Item upsert notice:', err);
-      throw new Error(`Item save failed: ${err}`);
-    }
-    this.broadcastChange('items', 'UPDATE', payload);
+      true
+    );
+    await this.assertOk(postResp, 'Save item');
   }
 
   public async deleteItem(id: string): Promise<void> {
     const cleanId = (id || '').trim();
-    const resp = await fetch(`${this.getCleanUrl()}/rest/v1/items?id=eq.${encodeURIComponent(cleanId)}`, {
-      method: 'DELETE',
-      headers: this.getHeaders(true)
-    });
-    if (!resp.ok) console.warn('Item delete notice:', await resp.text());
-    this.broadcastChange('items', 'DELETE', { id: cleanId });
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/items?id=eq.${encodeURIComponent(cleanId)}`,
+      { method: 'DELETE' },
+      true
+    );
+    await this.assertOk(resp, 'Delete item');
   }
 
-  public async updateItemQty(id: string, newQty: number): Promise<void> {
-    if (!id || typeof id !== 'string') {
-      console.warn('updateItemQty skipped: invalid item id', id);
-      return;
+  // Atomic stock adjustment RPC (prevents concurrent overwrite drift across Web + Android)
+  public async adjustItemQty(id: string, delta: number): Promise<number> {
+    const cleanId = (id || '').trim();
+    if (!cleanId) {
+      throw new Error('Cannot adjust stock: missing item ID');
     }
-    const cleanId = id.trim();
-    if (!cleanId) return;
+    const numericDelta = Number(delta);
+    if (!Number.isFinite(numericDelta)) {
+      throw new Error('Cannot adjust stock: invalid quantity delta');
+    }
 
-    // Use clean sanitized base URL (never double-slash or nested path) and ensure Content-Type: application/json
-    const endpoint = `${this.getCleanUrl()}/rest/v1/items?id=eq.${encodeURIComponent(cleanId)}`;
-    const resp = await fetch(endpoint, {
-      method: 'PATCH',
-      headers: {
-        ...this.getHeaders(true),
-        'Prefer': 'return=representation'
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/rpc/adjust_stock`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          p_item_id: cleanId,
+          p_delta: numericDelta,
+        }),
       },
-      body: JSON.stringify({ qty: Number(newQty) || 0, updated_at: new Date().toISOString() })
-    });
-    if (!resp.ok) {
-      const errText = await resp.text();
-      console.error('Qty update failed:', errText, 'Endpoint:', endpoint);
-      throw new Error(`Qty update failed: ${errText}`);
+      true
+    );
+    await this.assertOk(resp, 'Adjust stock quantity');
+    const result = await resp.json();
+    const newQty = Number(result);
+    if (!Number.isFinite(newQty)) {
+      throw new Error('Invalid quantity returned from adjust_stock RPC');
     }
-    // Broadcast real-time stock change so other devices/windows update immediately
-    this.broadcastChange('items', 'UPDATE', { id: cleanId, qty: Number(newQty) || 0, updated_at: new Date().toISOString() });
+    return newQty;
   }
 
   // --- Transactions REST API ---
   public async fetchTransactions(): Promise<TransactionRecord[]> {
     try {
-      const resp = await fetch(`${this.getCleanUrl()}/rest/v1/stock_transactions?select=*&order=created_at.desc&limit=100`, {
-        method: 'GET',
-        headers: this.getHeaders(false)
-      });
-      if (!resp.ok) return [];
+      const resp = await this.authorizedFetch(
+        `${this.getCleanUrl()}/rest/v1/stock_transactions?select=*&order=created_at.desc&limit=100`,
+        { method: 'GET' },
+        false
+      );
+      await this.assertOk(resp, 'Fetch transactions');
       const rows = await resp.json();
+      if (!Array.isArray(rows)) return [];
       return rows.map((r: any) => ({
         clientId: r.client_id || r.id,
         itemId: r.item_id,
@@ -802,11 +975,11 @@ class SupabaseService {
         balance: Number(r.balance),
         unit: r.unit || 'pcs',
         note: r.note || '',
-        createdAt: r.created_at || new Date().toISOString()
+        createdAt: r.created_at || new Date().toISOString(),
       }));
     } catch (e) {
       console.warn('Notice: Transaction fetch skipped:', e);
-      return [];
+      throw e;
     }
   }
 
@@ -820,18 +993,17 @@ class SupabaseService {
       balance: tx.balance,
       unit: tx.unit,
       note: tx.note,
-      created_at: tx.createdAt
+      created_at: tx.createdAt,
     };
-    try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/stock_transactions`, {
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/stock_transactions`,
+      {
         method: 'POST',
-        headers: this.getHeaders(true),
-        body: JSON.stringify(payload)
-      });
-      this.broadcastChange('stock_transactions', 'INSERT', payload);
-    } catch (e) {
-      console.warn('insertTransaction warning:', e);
-    }
+        body: JSON.stringify(payload),
+      },
+      true
+    );
+    await this.assertOk(resp, 'Save stock transaction');
   }
 
   // --- Cashflow REST API ---
@@ -845,7 +1017,10 @@ class SupabaseService {
     }
 
     let rawType: 'SALE' | 'EXPENSE' = 'SALE';
-    if (r.type && (String(r.type).toUpperCase() === 'EXPENSE' || String(r.type).toUpperCase() === 'SALE')) {
+    if (
+      r.type &&
+      (String(r.type).toUpperCase() === 'EXPENSE' || String(r.type).toUpperCase() === 'SALE')
+    ) {
       rawType = String(r.type).toUpperCase() as 'SALE' | 'EXPENSE';
     } else if (Number(r.cash_out || r.out_amount || 0) > 0) {
       rawType = 'EXPENSE';
@@ -865,50 +1040,48 @@ class SupabaseService {
     const rawPaymentMode = r.payment_mode || r.paymentMode || 'Cash';
 
     return {
-      id: String(r.id || r.client_id || Math.random().toString()),
+      id: String(r.id || r.client_id || generateUUID()),
       date: rawDate,
       type: rawType,
       category: String(r.category || 'General'),
       amount: rawAmount,
       paymentMode: rawPaymentMode as any,
       note: String(r.note || ''),
-      createdAt: String(r.created_at || r.updated_at || new Date().toISOString())
+      createdAt: String(r.created_at || r.updated_at || new Date().toISOString()),
     };
   }
 
-  public async fetchDailyCashflows(): Promise<DailyCashflowRecord[]> { return this.fetchCashflow(); }
+  public async fetchDailyCashflows(): Promise<DailyCashflowRecord[]> {
+    return this.fetchCashflow();
+  }
 
   public async fetchCashflow(): Promise<DailyCashflowRecord[]> {
-    try {
-      let resp = await fetch(`${this.getCleanUrl()}/rest/v1/daily_cashflow?select=*&order=date.desc`, {
-        method: 'GET',
-        headers: this.getHeaders(false)
-      });
+    let resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/daily_cashflow?select=*&order=date.desc`,
+      { method: 'GET' },
+      false
+    );
 
-      if (!resp.ok) {
-        resp = await fetch(`${this.getCleanUrl()}/rest/v1/daily_cashflow?select=*&order=created_at.desc`, {
-          method: 'GET',
-          headers: this.getHeaders(false)
-        });
-      }
-
-      if (!resp.ok) {
-        resp = await fetch(`${this.getCleanUrl()}/rest/v1/daily_cashflow?select=*`, {
-          method: 'GET',
-          headers: this.getHeaders(false)
-        });
-      }
-
-      if (!resp.ok) return [];
-
-      const rows = await resp.json();
-      if (!Array.isArray(rows)) return [];
-
-      return rows.map((r: any) => this.formatCashflowRecord(r));
-    } catch (e) {
-      console.warn('Notice: Cashflow sync skipped (network/offline):', e);
-      return [];
+    if (!resp.ok) {
+      resp = await this.authorizedFetch(
+        `${this.getCleanUrl()}/rest/v1/daily_cashflow?select=*&order=created_at.desc`,
+        { method: 'GET' },
+        false
+      );
     }
+
+    if (!resp.ok) {
+      resp = await this.authorizedFetch(
+        `${this.getCleanUrl()}/rest/v1/daily_cashflow?select=*`,
+        { method: 'GET' },
+        false
+      );
+    }
+
+    await this.assertOk(resp, 'Fetch cashflow');
+    const rows = await resp.json();
+    if (!Array.isArray(rows)) return [];
+    return rows.map((r: any) => this.formatCashflowRecord(r));
   }
 
   public async upsertCashflow(cf: DailyCashflowRecord): Promise<void> {
@@ -920,24 +1093,25 @@ class SupabaseService {
       amount: cf.amount,
       payment_mode: cf.paymentMode,
       note: cf.note,
-      created_at: cf.createdAt || new Date().toISOString()
+      created_at: cf.createdAt || new Date().toISOString(),
     };
-    try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/daily_cashflow?on_conflict=id`, {
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/daily_cashflow?on_conflict=id`,
+      {
         method: 'POST',
         headers: {
-          ...this.getHeaders(true),
-          'Prefer': 'resolution=merge-duplicates'
+          Prefer: 'resolution=merge-duplicates',
         },
-        body: JSON.stringify(payload)
-      });
-      this.broadcastChange('daily_cashflow', 'UPDATE', payload);
-    } catch (e) {
-      console.warn('upsertCashflow warning:', e);
-    }
+        body: JSON.stringify(payload),
+      },
+      true
+    );
+    await this.assertOk(resp, 'Save cashflow');
   }
 
-  private normalizeQuotationStatus(raw?: string | null): 'Draft' | 'Sent' | 'Accepted' | 'Converted' {
+  private normalizeQuotationStatus(
+    raw?: string | null
+  ): 'Draft' | 'Sent' | 'Accepted' | 'Converted' {
     const s = String(raw || '').trim().toLowerCase();
     if (s === 'sent') return 'Sent';
     if (s === 'accepted') return 'Accepted';
@@ -947,56 +1121,60 @@ class SupabaseService {
 
   // --- Quotations REST API ---
   public async fetchQuotations(): Promise<QuotationRecord[]> {
-    try {
-      const resp = await fetch(`${this.getCleanUrl()}/rest/v1/quotations?select=*&order=created_at.desc`, {
-        method: 'GET',
-        headers: this.getHeaders(false)
-      });
-      if (!resp.ok) return [];
-      const rows = await resp.json();
-      if (!Array.isArray(rows)) return [];
-      return rows.map((r: any) => {
-        let parsedItems: any[] = [];
-        try {
-          parsedItems = typeof r.items === 'string' ? JSON.parse(r.items) : (Array.isArray(r.items) ? r.items : []);
-        } catch {
-          parsedItems = [];
-        }
-        const normalizedItems = parsedItems.map((it: any) => ({
-          itemId: it.itemId || it.item_id || null,
-          name: String(it.name || ''),
-          code: String(it.code || ''),
-          type: String(it.type || ''),
-          unit: String(it.unit || 'pcs'),
-          qty: Number(it.qty || 0),
-          unitPrice: Number(it.unitPrice ?? it.unit_price ?? 0),
-          discountPercent: Number(it.discountPercent ?? it.discount_percent ?? 0),
-          total: Number(it.total || 0)
-        }));
-        const createdIso = String(r.created_at || new Date().toISOString());
-        return {
-          id: String(r.id || r.client_id || ''),
-          quotationNo: String(r.quotation_no || r.quotationNo || `EST-${String(r.id || '').slice(0, 4).toUpperCase()}`),
-          customerName: String(r.customer_name || r.customerName || 'Walk-in Customer'),
-          customerPhone: String(r.customer_phone || r.customerPhone || ''),
-          customerAddress: String(r.customer_address || r.customerAddress || ''),
-          date: String(r.date || createdIso.split('T')[0] || ''),
-          validUntil: String(r.valid_until || r.validUntil || ''),
-          items: normalizedItems,
-          subtotal: Number(r.subtotal || 0),
-          discount: Number(r.discount || 0),
-          taxPercent: Number(r.tax_percent ?? r.taxPercent ?? 0),
-          taxAmount: Number(r.tax_amount ?? r.taxAmount ?? 0),
-          grandTotal: Number(r.grand_total ?? r.final_amount ?? r.grandTotal ?? 0),
-          status: this.normalizeQuotationStatus(r.status),
-          notes: String(r.notes || ''),
-          createdAt: createdIso
-        };
-      });
-    } catch (e) {
-      console.warn('Notice: Quotations sync skipped:', e);
-      return [];
-    }
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/quotations?select=*&order=created_at.desc`,
+      { method: 'GET' },
+      false
+    );
+    await this.assertOk(resp, 'Fetch quotations');
+    const rows = await resp.json();
+    if (!Array.isArray(rows)) return [];
+    return rows.map((r: any) => {
+      let parsedItems: any[] = [];
+      try {
+        parsedItems =
+          typeof r.items === 'string'
+            ? JSON.parse(r.items)
+            : Array.isArray(r.items)
+            ? r.items
+            : [];
+      } catch (e) {
+        console.warn('Quotation items parse notice:', e);
+        parsedItems = [];
+      }
+      const normalizedItems = parsedItems.map((it: any) => ({
+        itemId: it.itemId || it.item_id || null,
+        name: String(it.name || ''),
+        code: String(it.code || ''),
+        type: String(it.type || ''),
+        unit: String(it.unit || 'pcs'),
+        qty: Number(it.qty || 0),
+        unitPrice: Number(it.unitPrice ?? it.unit_price ?? 0),
+        discountPercent: Number(it.discountPercent ?? it.discount_percent ?? 0),
+        total: Number(it.total || 0),
+      }));
+      const createdIso = String(r.created_at || new Date().toISOString());
+      return {
+        id: String(r.id || r.client_id || ''),
+        quotationNo: String(
+          r.quotation_no || r.quotationNo || `EST-${String(r.id || '').slice(0, 4).toUpperCase()}`
+        ),
+        customerName: String(r.customer_name || r.customerName || 'Walk-in Customer'),
+        customerPhone: String(r.customer_phone || r.customerPhone || ''),
+        customerAddress: String(r.customer_address || r.customerAddress || ''),
+        date: String(r.date || createdIso.split('T')[0] || ''),
+        validUntil: String(r.valid_until || r.validUntil || ''),
+        items: normalizedItems,
+        subtotal: Number(r.subtotal || 0),
+        discount: Number(r.discount || 0),
+        taxPercent: Number(r.tax_percent ?? r.taxPercent ?? 0),
+        taxAmount: Number(r.tax_amount ?? r.taxAmount ?? 0),
+        grandTotal: Number(r.grand_total ?? r.final_amount ?? r.grandTotal ?? 0),
+        status: this.normalizeQuotationStatus(r.status),
+        notes: String(r.notes || ''),
+        createdAt: createdIso,
+      };
+    });
   }
 
   public async upsertQuotation(quote: QuotationRecord): Promise<void> {
@@ -1016,49 +1194,46 @@ class SupabaseService {
       grand_total: Number(quote.grandTotal ?? (quote as any).finalAmount ?? 0),
       status: quote.status || 'Draft',
       notes: quote.notes || '',
-      created_at: quote.createdAt || new Date().toISOString()
+      created_at: quote.createdAt || new Date().toISOString(),
     };
-    try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/quotations?on_conflict=id`, {
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/quotations?on_conflict=id`,
+      {
         method: 'POST',
         headers: {
-          ...this.getHeaders(true),
-          'Prefer': 'resolution=merge-duplicates'
+          Prefer: 'resolution=merge-duplicates',
         },
-        body: JSON.stringify(payload)
-      });
-      this.broadcastChange('quotations', 'UPDATE', payload);
-    } catch (e) {
-      console.warn('upsertQuotation warning:', e);
-    }
+        body: JSON.stringify(payload),
+      },
+      true
+    );
+    await this.assertOk(resp, 'Save quotation');
   }
 
   // --- Ledger Accounts REST API ---
   public async fetchLedgerAccounts(): Promise<LedgerAccount[]> {
-    try {
-      const resp = await fetch(`${this.getCleanUrl()}/rest/v1/ledger_accounts?select=*&order=name.asc`, {
-        method: 'GET',
-        headers: this.getHeaders(false)
-      });
-      if (!resp.ok) return [];
-      const rows = await resp.json();
-      if (!Array.isArray(rows)) return [];
-      return rows.map((r: any) => ({
-        id: String(r.id || r.client_id || ''),
-        name: String(r.name || ''),
-        phone: String(r.phone || ''),
-        address: String(r.address || ''),
-        type: (String(r.type || 'CUSTOMER').toUpperCase() === 'SUPPLIER' ? 'SUPPLIER' : 'CUSTOMER') as 'CUSTOMER' | 'SUPPLIER',
-        netBalance: Number(r.net_balance ?? r.netBalance ?? 0),
-        creditLimit: Number(r.credit_limit ?? r.creditLimit ?? 0),
-        notes: String(r.notes || ''),
-        createdAt: String(r.created_at || new Date().toISOString()),
-        updatedAt: String(r.updated_at || r.created_at || new Date().toISOString())
-      }));
-    } catch (e) {
-      console.warn('Notice: Ledger accounts fetch skipped:', e);
-      return [];
-    }
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/ledger_accounts?select=*&order=name.asc`,
+      { method: 'GET' },
+      false
+    );
+    await this.assertOk(resp, 'Fetch ledger accounts');
+    const rows = await resp.json();
+    if (!Array.isArray(rows)) return [];
+    return rows.map((r: any) => ({
+      id: String(r.id || r.client_id || ''),
+      name: String(r.name || ''),
+      phone: String(r.phone || ''),
+      address: String(r.address || ''),
+      type: (String(r.type || 'CUSTOMER').toUpperCase() === 'SUPPLIER'
+        ? 'SUPPLIER'
+        : 'CUSTOMER') as 'CUSTOMER' | 'SUPPLIER',
+      netBalance: Number(r.net_balance ?? r.netBalance ?? 0),
+      creditLimit: Number(r.credit_limit ?? r.creditLimit ?? 0),
+      notes: String(r.notes || ''),
+      createdAt: String(r.created_at || new Date().toISOString()),
+      updatedAt: String(r.updated_at || r.created_at || new Date().toISOString()),
+    }));
   }
 
   public async upsertLedgerAccount(account: LedgerAccount): Promise<void> {
@@ -1072,55 +1247,46 @@ class SupabaseService {
       credit_limit: Number(account.creditLimit || 0),
       notes: account.notes || '',
       created_at: account.createdAt || new Date().toISOString(),
-      updated_at: account.updatedAt || new Date().toISOString()
+      updated_at: account.updatedAt || new Date().toISOString(),
     };
-    try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/ledger_accounts?on_conflict=id`, {
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/ledger_accounts?on_conflict=id`,
+      {
         method: 'POST',
         headers: {
-          ...this.getHeaders(true),
-          'Prefer': 'resolution=merge-duplicates'
+          Prefer: 'resolution=merge-duplicates',
         },
-        body: JSON.stringify(payload)
-      });
-      this.broadcastChange('ledger_accounts', 'UPDATE', payload);
-    } catch (e) {
-      console.warn('upsertLedgerAccount warning:', e);
-    }
+        body: JSON.stringify(payload),
+      },
+      true
+    );
+    await this.assertOk(resp, 'Save ledger account');
   }
 
   // --- Ledger Entries REST API ---
   public async fetchLedgerEntries(accountId?: string): Promise<LedgerEntry[]> {
-    try {
-      const endpoint = accountId
-        ? `${this.getCleanUrl()}/rest/v1/ledger_entries?select=*&account_id=eq.${encodeURIComponent(accountId)}&order=created_at.desc`
-        : `${this.getCleanUrl()}/rest/v1/ledger_entries?select=*&order=created_at.desc`;
-      const resp = await fetch(endpoint, {
-        method: 'GET',
-        headers: this.getHeaders(false)
-      });
-      if (!resp.ok) return [];
-      const rows = await resp.json();
-      if (!Array.isArray(rows)) return [];
-      return rows.map((r: any) => {
-        const createdIso = String(r.created_at || new Date().toISOString());
-        const rawType = String(r.type || r.entry_type || 'GAVE').toUpperCase();
-        return {
-          id: String(r.id || r.client_id || ''),
-          accountId: String(r.account_id || r.accountId || ''),
-          type: (rawType === 'GOT' ? 'GOT' : 'GAVE') as 'GAVE' | 'GOT',
-          amount: Number(r.amount || 0),
-          balanceAfter: Number(r.balance_after ?? r.balanceAfter ?? 0),
-          date: String(r.date || createdIso.split('T')[0] || ''),
-          description: String(r.description ?? r.note ?? ''),
-          billRef: String(r.bill_ref || r.billRef || ''),
-          createdAt: createdIso
-        };
-      });
-    } catch (e) {
-      console.warn('Notice: Ledger entries fetch skipped:', e);
-      return [];
-    }
+    const endpoint = accountId
+      ? `${this.getCleanUrl()}/rest/v1/ledger_entries?select=*&account_id=eq.${encodeURIComponent(accountId)}&order=created_at.desc`
+      : `${this.getCleanUrl()}/rest/v1/ledger_entries?select=*&order=created_at.desc`;
+    const resp = await this.authorizedFetch(endpoint, { method: 'GET' }, false);
+    await this.assertOk(resp, 'Fetch ledger entries');
+    const rows = await resp.json();
+    if (!Array.isArray(rows)) return [];
+    return rows.map((r: any) => {
+      const createdIso = String(r.created_at || new Date().toISOString());
+      const rawType = String(r.type || r.entry_type || 'GAVE').toUpperCase();
+      return {
+        id: String(r.id || r.client_id || ''),
+        accountId: String(r.account_id || r.accountId || ''),
+        type: (rawType === 'GOT' ? 'GOT' : 'GAVE') as 'GAVE' | 'GOT',
+        amount: Number(r.amount || 0),
+        balanceAfter: Number(r.balance_after ?? r.balanceAfter ?? 0),
+        date: String(r.date || createdIso.split('T')[0] || ''),
+        description: String(r.description ?? r.note ?? ''),
+        billRef: String(r.bill_ref || r.billRef || ''),
+        createdAt: createdIso,
+      };
+    });
   }
 
   public async insertLedgerEntry(entry: LedgerEntry): Promise<void> {
@@ -1133,35 +1299,33 @@ class SupabaseService {
       date: entry.date || new Date().toISOString().split('T')[0],
       description: entry.description ?? (entry as any).note ?? '',
       bill_ref: entry.billRef || '',
-      created_at: entry.createdAt || new Date().toISOString()
+      created_at: entry.createdAt || new Date().toISOString(),
     };
-    try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/ledger_entries?on_conflict=id`, {
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/ledger_entries?on_conflict=id`,
+      {
         method: 'POST',
         headers: {
-          ...this.getHeaders(true),
-          'Prefer': 'resolution=merge-duplicates'
+          Prefer: 'resolution=merge-duplicates',
         },
-        body: JSON.stringify(payload)
-      });
-      this.broadcastChange('ledger_entries', 'INSERT', payload);
-    } catch (e) {
-      console.warn('insertLedgerEntry warning:', e);
-    }
+        body: JSON.stringify(payload),
+      },
+      true
+    );
+    await this.assertOk(resp, 'Save ledger entry');
   }
 
-  // Helper aliases
-  public async deleteMultipleItems(ids: string[]) {
+  public async deleteMultipleItems(ids: string[]): Promise<void> {
     for (const id of ids) {
       await this.deleteItem(id);
     }
   }
 
-  public async upsertLedgerEntry(entry: any) {
+  public async upsertLedgerEntry(entry: any): Promise<void> {
     return this.insertLedgerEntry(entry);
   }
 
-  public async insertPurchaseRecord(purchase: any) {
+  public async insertPurchaseRecord(purchase: any): Promise<void> {
     const payload = {
       client_id: purchase.client_id || purchase.clientId || generateUUID(),
       supplier: purchase.supplier || '',
@@ -1169,73 +1333,58 @@ class SupabaseService {
       bill_date: purchase.bill_date || purchase.billDate || new Date().toISOString().slice(0, 10),
       total: Number(purchase.total || 0),
       lines: purchase.lines || [],
-      created_at: purchase.created_at || purchase.createdAt || new Date().toISOString()
+      created_at: purchase.created_at || purchase.createdAt || new Date().toISOString(),
     };
-    try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/purchases`, {
-        method: "POST",
-        headers: this.getHeaders(true),
-        body: JSON.stringify(payload)
-      });
-      this.broadcastChange('purchases', 'INSERT', payload);
-    } catch (e) {
-      console.warn("insertPurchaseRecord warning:", e);
-    }
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/purchases`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+      true
+    );
+    await this.assertOk(resp, 'Save purchase record');
   }
 
-  public async deleteQuotation(id: string) {
-    try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/quotations?id=eq.${encodeURIComponent(id)}`, {
-        method: "DELETE",
-        headers: this.getHeaders(true)
-      });
-      this.broadcastChange('quotations', 'DELETE', { id });
-    } catch (e) {
-      console.warn("deleteQuotation warning:", e);
-    }
+  public async deleteQuotation(id: string): Promise<void> {
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/quotations?id=eq.${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+      true
+    );
+    await this.assertOk(resp, 'Delete quotation');
   }
 
-  public async deleteLedgerAccount(id: string) {
-    try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/ledger_accounts?id=eq.${encodeURIComponent(id)}`, {
-        method: "DELETE",
-        headers: this.getHeaders(true)
-      });
-      this.broadcastChange('ledger_accounts', 'DELETE', { id });
-    } catch (e) {
-      console.warn("deleteLedgerAccount warning:", e);
-    }
+  public async deleteLedgerAccount(id: string): Promise<void> {
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/ledger_accounts?id=eq.${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+      true
+    );
+    await this.assertOk(resp, 'Delete ledger account');
   }
 
-  public async deleteLedgerEntry(id: string) {
-    try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/ledger_entries?id=eq.${encodeURIComponent(id)}`, {
-        method: "DELETE",
-        headers: this.getHeaders(true)
-      });
-      this.broadcastChange('ledger_entries', 'DELETE', { id });
-    } catch (e) {
-      console.warn("deleteLedgerEntry warning:", e);
-    }
+  public async deleteLedgerEntry(id: string): Promise<void> {
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/ledger_entries?id=eq.${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+      true
+    );
+    await this.assertOk(resp, 'Delete ledger entry');
   }
 
-  public async insertCashflowRecord(record: any) {
+  public async insertCashflowRecord(record: any): Promise<void> {
     return this.upsertCashflow(record);
   }
 
-  public async deleteCashflowRecord(id: string) {
-    try {
-      await fetch(`${this.getCleanUrl()}/rest/v1/daily_cashflow?id=eq.${encodeURIComponent(id)}`, {
-        method: "DELETE",
-        headers: this.getHeaders(true)
-      });
-      this.broadcastChange('daily_cashflow', 'DELETE', { id });
-    } catch (e) {
-      console.warn("deleteCashflowRecord warning:", e);
-    }
+  public async deleteCashflowRecord(id: string): Promise<void> {
+    const resp = await this.authorizedFetch(
+      `${this.getCleanUrl()}/rest/v1/daily_cashflow?id=eq.${encodeURIComponent(id)}`,
+      { method: 'DELETE' },
+      true
+    );
+    await this.assertOk(resp, 'Delete cashflow');
   }
-
 }
-
 
 export const supabaseService = new SupabaseService();

@@ -338,7 +338,9 @@ export const festivalPreferenceStore = {
     const json = FestivalStudioCodec.toJsonString(normalized);
     try {
       localStorage.setItem(STORAGE_KEY_STUDIO_JSON, json);
-    } catch {}
+    } catch (e) {
+      console.warn('Could not save festival studio config:', e);
+    }
     return { normalized, json };
   },
 
@@ -357,7 +359,9 @@ export const festivalPreferenceStore = {
     if (currentJson === parsedJson) return null;
     try {
       localStorage.setItem(STORAGE_KEY_STUDIO_JSON, rawJson);
-    } catch {}
+    } catch (e) {
+      console.warn('Could not cache remote festival studio config:', e);
+    }
     return parsed;
   },
 };
@@ -873,7 +877,7 @@ export function resolveFestivalStyle(
       gradientStart = '#B45309';
       gradientMid = '#D97706';
       gradientEnd = '#EA580C';
-      defaultBannerAsset = '/festivals/img_festival_diwali.jpg';
+      defaultBannerAsset = '/festivals/img_festival_diwali.webp';
       break;
     case 'eid':
     case 'eid_mubarak':

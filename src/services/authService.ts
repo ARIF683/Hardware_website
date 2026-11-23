@@ -1,5 +1,10 @@
 import { UserAccount } from '../types';
-import { cleanSupabaseUrl, SUPABASE_KEY, SUPABASE_URL } from './supabaseService';
+import {
+  cleanSupabaseUrl,
+  isValidCustomSupabaseUrl,
+  SUPABASE_KEY,
+  SUPABASE_URL,
+} from './supabaseService';
 
 export const MAX_AUTH_TRIES = 5;
 export const MIN_PASSWORD_LENGTH = 8;
@@ -10,9 +15,7 @@ export const RESEND_COOLDOWN_MS = 60_000;
 
 const EMAIL_REGEX = /^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
 
-const KEY_AUTHED = 'hardware_auth_is_authed';
-const KEY_ADMIN = 'hardware_auth_is_admin';
-const KEY_CURRENT_USER_EMAIL = 'hardware_auth_current_user_email';
+// Stored session token keys (kept in sessionStorage only — never isAuthed/isAdmin trust flags)
 const KEY_ACCESS_TOKEN = 'hardware_auth_access_token';
 const KEY_REFRESH_TOKEN = 'hardware_auth_refresh_token';
 const KEY_FAILS = 'hardware_auth_login_fails';
@@ -20,13 +23,16 @@ const KEY_LOCK_UNTIL = 'hardware_auth_lock_until';
 const KEY_LOCK_STRIKES = 'hardware_auth_lock_strikes';
 const KEY_OTP_EXPIRES_AT = 'hardware_auth_otp_expires_at';
 const KEY_RESEND_AVAILABLE_AT = 'hardware_auth_resend_available_at';
-const KEY_REGISTERED_USERS = 'hardware_auth_registered_users';
 const KEY_ROLES_UPDATED_AT = 'hardware_auth_roles_updated_at';
 const KEY_PENDING_SIGNUP_EMAIL = 'hardware_auth_pending_signup_email';
 const KEY_LAST_EMAIL = 'hardware_auth_last_signed_in_email';
 
+// Allow-listed non-sensitive key preserved across explicit logout (removed on account deletion)
+const LOGOUT_KEY_ALLOWLIST = new Set<string>([KEY_LAST_EMAIL]);
+
 export interface AuthStateSnapshot {
   isAuthed: boolean;
+  isVerifyingSession: boolean;
   isAdmin: boolean;
   currentUserEmail: string | null;
   pendingVerificationEmail: string | null;
@@ -46,7 +52,8 @@ export interface AuthActionResult {
 function getStorageString(key: string): string {
   try {
     return localStorage.getItem(key) || '';
-  } catch {
+  } catch (e) {
+    console.warn(`Storage read warning (${key}):`, e);
     return '';
   }
 }
@@ -54,13 +61,42 @@ function getStorageString(key: string): string {
 function setStorageString(key: string, val: string) {
   try {
     localStorage.setItem(key, val);
-  } catch {}
+  } catch (e) {
+    console.warn(`Storage write warning (${key}):`, e);
+  }
 }
 
 function removeStorage(key: string) {
   try {
     localStorage.removeItem(key);
-  } catch {}
+  } catch (e) {
+    console.warn(`Storage remove warning (${key}):`, e);
+  }
+}
+
+function getSessionTokenString(key: string): string {
+  try {
+    return sessionStorage.getItem(key) || '';
+  } catch (e) {
+    console.warn(`SessionStorage read warning (${key}):`, e);
+    return '';
+  }
+}
+
+function setSessionTokenString(key: string, val: string) {
+  try {
+    sessionStorage.setItem(key, val);
+  } catch (e) {
+    console.warn(`SessionStorage write warning (${key}):`, e);
+  }
+}
+
+function removeSessionToken(key: string) {
+  try {
+    sessionStorage.removeItem(key);
+  } catch (e) {
+    console.warn(`SessionStorage remove warning (${key}):`, e);
+  }
 }
 
 function getStorageNum(key: string, fallback = 0): number {
@@ -69,7 +105,8 @@ function getStorageNum(key: string, fallback = 0): number {
     if (!raw) return fallback;
     const n = Number(raw);
     return Number.isFinite(n) ? n : fallback;
-  } catch {
+  } catch (e) {
+    console.warn(`Storage number read warning (${key}):`, e);
     return fallback;
   }
 }
@@ -77,12 +114,35 @@ function getStorageNum(key: string, fallback = 0): number {
 function setStorageNum(key: string, val: number) {
   try {
     localStorage.setItem(key, String(val));
-  } catch {}
+  } catch (e) {
+    console.warn(`Storage number write warning (${key}):`, e);
+  }
+}
+
+export function clearHardwareWebStorage(keepLastEmail = true) {
+  const clearStore = (store: Storage | undefined) => {
+    if (!store) return;
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < store.length; i++) {
+        const k = store.key(i);
+        if (!k) continue;
+        if (k.startsWith('hardware_')) {
+          if (keepLastEmail && LOGOUT_KEY_ALLOWLIST.has(k)) continue;
+          keysToRemove.push(k);
+        }
+      }
+      keysToRemove.forEach((k) => store.removeItem(k));
+    } catch (e) {
+      console.warn('Could not clear hardware storage keys:', e);
+    }
+  };
+  if (typeof localStorage !== 'undefined') clearStore(localStorage);
+  if (typeof sessionStorage !== 'undefined') clearStore(sessionStorage);
 }
 
 function getSupabaseCredentials(): { baseUrl: string; apiKey: string } {
-  const storedUrl = getStorageString('hardware_supabase_url');
-  const storedKey = getStorageString('hardware_supabase_key');
+  const isDev = typeof import.meta !== 'undefined' && Boolean(import.meta.env?.DEV);
   const envUrl =
     typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL
       ? String(import.meta.env.VITE_SUPABASE_URL)
@@ -92,8 +152,18 @@ function getSupabaseCredentials(): { baseUrl: string; apiKey: string } {
       ? String(import.meta.env.VITE_SUPABASE_ANON_KEY)
       : '';
 
-  const baseUrl = cleanSupabaseUrl(storedUrl || envUrl || SUPABASE_URL);
-  const candidateKey = (storedKey || envKey || SUPABASE_KEY)
+  let customUrl = '';
+  let customKey = '';
+  if (isDev) {
+    const candidateCustom = getStorageString('hardware_supabase_url');
+    if (candidateCustom && isValidCustomSupabaseUrl(candidateCustom)) {
+      customUrl = candidateCustom;
+      customKey = getStorageString('hardware_supabase_key');
+    }
+  }
+
+  const baseUrl = cleanSupabaseUrl(customUrl || envUrl || SUPABASE_URL);
+  const candidateKey = (customKey || envKey || SUPABASE_KEY)
     .trim()
     .replace(/[\r\n\t]/g, '')
     .replace(/^Bearer\s+/i, '')
@@ -127,11 +197,11 @@ export function formatOtpCountdown(seconds: number): string {
 function extractSupabaseError(rawBody: string, fallbackCode: number): string {
   try {
     const obj = JSON.parse(rawBody);
-    const candidate =
-      obj?.error_description || obj?.msg || obj?.message || obj?.error;
+    const candidate = obj?.error_description || obj?.msg || obj?.message || obj?.error;
     if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
     return `HTTP ${fallbackCode}`;
-  } catch {
+  } catch (e) {
+    console.warn('Error body parse fallback:', e);
     return rawBody.trim() || `HTTP ${fallbackCode}`;
   }
 }
@@ -154,6 +224,7 @@ function isEmailConfirmed(userObj: any): boolean {
   );
 }
 
+// Role authority strictly checks app_metadata (never user_metadata)
 function isMetadataAdmin(userObj: any): boolean {
   if (!userObj || typeof userObj !== 'object') return false;
   const appMeta = userObj.app_metadata;
@@ -180,7 +251,8 @@ export function parseUsersJson(rawJson: string): UserAccount[] {
       out.push({ email, isAdmin });
     }
     return out;
-  } catch {
+  } catch (e) {
+    console.warn('Failed parsing users JSON:', e);
     return [];
   }
 }
@@ -197,6 +269,8 @@ export function serializeUsers(list: UserAccount[]): string {
 class AuthService {
   private state: AuthStateSnapshot;
   private listeners = new Set<(snapshot: AuthStateSnapshot) => void>();
+  private inMemoryAccessToken = '';
+  private inMemoryRefreshToken = '';
   private loginFails = 0;
   private lockUntil = 0;
   private otpExpiresAt = 0;
@@ -207,11 +281,23 @@ class AuthService {
   private refreshPromise: Promise<boolean> | null = null;
 
   public onRolesChangedListener: ((rolesJson: string, updatedAt: number) => void) | null = null;
+  public onTokenRefreshedListener: (() => void) | null = null;
+  public onSignedOutListener: (() => void) | null = null;
 
   constructor() {
-    const savedUsersRaw = getStorageString(KEY_REGISTERED_USERS);
-    const savedUsers = savedUsersRaw ? parseUsersJson(savedUsersRaw) : [];
-    const currentEmail = getStorageString(KEY_CURRENT_USER_EMAIL).trim().toLowerCase() || null;
+    // Purge legacy spoofable localStorage trust flags if present from older versions
+    removeStorage('hardware_auth_is_authed');
+    removeStorage('hardware_auth_is_admin');
+    removeStorage('hardware_auth_current_user_email');
+    removeStorage('hardware_auth_registered_users');
+    removeStorage(KEY_ACCESS_TOKEN);
+    removeStorage(KEY_REFRESH_TOKEN);
+
+    const existingAccess = getSessionTokenString(KEY_ACCESS_TOKEN);
+    const existingRefresh = getSessionTokenString(KEY_REFRESH_TOKEN);
+    this.inMemoryAccessToken = existingAccess;
+    this.inMemoryRefreshToken = existingRefresh;
+
     const pendingEmail = getStorageString(KEY_PENDING_SIGNUP_EMAIL).trim().toLowerCase() || null;
 
     this.loginFails = getStorageNum(KEY_FAILS, 0);
@@ -235,12 +321,16 @@ class AuthService {
       removeStorage(KEY_RESEND_AVAILABLE_AT);
     }
 
+    const hasCandidateSession = Boolean(existingAccess || existingRefresh);
+
+    // SECURITY: Always start unauthenticated & non-admin until /auth/v1/user confirms the token
     this.state = {
-      isAuthed: getStorageString(KEY_AUTHED) === 'true',
-      isAdmin: getStorageString(KEY_ADMIN) === 'true',
-      currentUserEmail: currentEmail,
+      isAuthed: false,
+      isVerifyingSession: hasCandidateSession,
+      isAdmin: false,
+      currentUserEmail: null,
       pendingVerificationEmail: pendingEmail,
-      registeredUsers: savedUsers,
+      registeredUsers: [],
       lockRemainingSeconds: this.getRemainingLockSeconds(),
       otpRemainingSeconds: this.getRemainingOtpSeconds(),
       resendCooldownSeconds: this.getRemainingResendSeconds(),
@@ -251,6 +341,10 @@ class AuthService {
     if (this.lockUntil > now) this.startLockCountdown();
     if (this.otpExpiresAt > now) this.startOtpCountdown();
     if (this.resendAvailableAt > now) this.startResendCountdown();
+
+    if (hasCandidateSession) {
+      void this.bootstrapSession();
+    }
   }
 
   public getSnapshot(): AuthStateSnapshot {
@@ -277,19 +371,30 @@ class AuthService {
   }
 
   public activeAccessToken(): string {
-    return getStorageString(KEY_ACCESS_TOKEN);
+    return this.inMemoryAccessToken || getSessionTokenString(KEY_ACCESS_TOKEN);
   }
 
   public activeRefreshToken(): string {
-    return getStorageString(KEY_REFRESH_TOKEN);
+    return this.inMemoryRefreshToken || getSessionTokenString(KEY_REFRESH_TOKEN);
   }
 
   private saveSessionTokens(accessToken: string, refreshToken: string) {
-    if (accessToken) setStorageString(KEY_ACCESS_TOKEN, accessToken);
-    if (refreshToken) setStorageString(KEY_REFRESH_TOKEN, refreshToken);
+    if (accessToken) {
+      this.inMemoryAccessToken = accessToken;
+      setSessionTokenString(KEY_ACCESS_TOKEN, accessToken);
+    }
+    if (refreshToken) {
+      this.inMemoryRefreshToken = refreshToken;
+      setSessionTokenString(KEY_REFRESH_TOKEN, refreshToken);
+    }
+    this.onTokenRefreshedListener?.();
   }
 
   private clearSessionTokens() {
+    this.inMemoryAccessToken = '';
+    this.inMemoryRefreshToken = '';
+    removeSessionToken(KEY_ACCESS_TOKEN);
+    removeSessionToken(KEY_REFRESH_TOKEN);
     removeStorage(KEY_ACCESS_TOKEN);
     removeStorage(KEY_REFRESH_TOKEN);
   }
@@ -308,10 +413,97 @@ class AuthService {
     );
   }
 
-  private activeAuthHeader(): string {
+  // Strictly returns user bearer token — NEVER falls back to anon key
+  private activeAuthHeader(): string | null {
     const token = this.activeAccessToken();
-    const { apiKey } = getSupabaseCredentials();
-    return token ? `Bearer ${token}` : `Bearer ${apiKey}`;
+    return token ? `Bearer ${token}` : null;
+  }
+
+  // Validate session on page load strictly against /auth/v1/user and app_users
+  public async bootstrapSession(): Promise<boolean> {
+    this.emit({ isVerifyingSession: true });
+    try {
+      if (!this.isSupabaseConfigured()) {
+        this.clearSessionTokens();
+        this.emit({
+          isAuthed: false,
+          isAdmin: false,
+          currentUserEmail: null,
+          isVerifyingSession: false,
+        });
+        return false;
+      }
+
+      let token = this.activeAccessToken();
+      if (!token && this.activeRefreshToken()) {
+        await this.refreshSession();
+        token = this.activeAccessToken();
+      }
+      if (!token) {
+        this.clearSessionTokens();
+        this.emit({
+          isAuthed: false,
+          isAdmin: false,
+          currentUserEmail: null,
+          isVerifyingSession: false,
+        });
+        return false;
+      }
+
+      const { baseUrl, apiKey } = getSupabaseCredentials();
+      const fetchUser = async (bearer: string) =>
+        fetch(`${baseUrl}/auth/v1/user`, {
+          method: 'GET',
+          headers: {
+            apikey: apiKey,
+            Authorization: `Bearer ${bearer}`,
+          },
+        });
+
+      let resp = await fetchUser(token);
+      if (resp.status === 401 && (await this.refreshSession())) {
+        token = this.activeAccessToken();
+        if (token) resp = await fetchUser(token);
+      }
+
+      if (!resp.ok) {
+        this.forceSessionExpiredSignOut('Your session has expired. Please sign in again.');
+        return false;
+      }
+
+      const userObj = await resp.json().catch(() => null);
+      const verifiedEmail = String(userObj?.email || '').trim().toLowerCase();
+      if (!verifiedEmail) {
+        this.forceSessionExpiredSignOut('Could not verify your account session.');
+        return false;
+      }
+
+      const metadataAdmin = isMetadataAdmin(userObj);
+      const remoteUsers = await this.fetchRemoteAppUsers(token);
+      const usersList = remoteUsers || [{ email: verifiedEmail, isAdmin: metadataAdmin }];
+      const matched = usersList.find((u) => u.email.toLowerCase() === verifiedEmail);
+      const resolvedAdmin = Boolean(matched?.isAdmin) || metadataAdmin;
+
+      this.setUsersInMemory(usersList, Date.now(), false);
+      setStorageString(KEY_LAST_EMAIL, verifiedEmail);
+      this.emit({
+        isAuthed: true,
+        isAdmin: resolvedAdmin,
+        currentUserEmail: verifiedEmail,
+        isVerifyingSession: false,
+      });
+      return true;
+    } catch (e) {
+      console.warn('Session verification check failed:', e);
+      this.clearSessionTokens();
+      this.emit({
+        isAuthed: false,
+        isAdmin: false,
+        currentUserEmail: null,
+        isVerifyingSession: false,
+      });
+      return false;
+    }
   }
 
   // --- Timers ---
@@ -464,7 +656,8 @@ class AuthService {
     this.emit({ pendingVerificationEmail: clean });
   }
 
-  private saveUsersLocally(list: UserAccount[], updatedAt = Date.now()) {
+  // Keeps role list in JS memory only (never trusted from localStorage)
+  private setUsersInMemory(list: UserAccount[], updatedAt = Date.now(), syncAdminHint = true) {
     const seen = new Set<string>();
     const cleanList: UserAccount[] = [];
     for (const u of list) {
@@ -473,16 +666,14 @@ class AuthService {
       seen.add(email);
       cleanList.push({ email, isAdmin: Boolean(u.isAdmin) });
     }
-    setStorageString(KEY_REGISTERED_USERS, serializeUsers(cleanList));
     setStorageNum(KEY_ROLES_UPDATED_AT, updatedAt);
 
     let nextAdmin = this.state.isAdmin;
     const activeEmail = this.state.currentUserEmail;
-    if (activeEmail) {
+    if (syncAdminHint && this.state.isAuthed && activeEmail) {
       const matched = cleanList.find((u) => u.email.toLowerCase() === activeEmail.toLowerCase());
-      if (matched && matched.isAdmin !== nextAdmin) {
+      if (matched) {
         nextAdmin = matched.isAdmin;
-        setStorageString(KEY_ADMIN, String(nextAdmin));
       }
     }
     this.emit({ registeredUsers: cleanList, isAdmin: nextAdmin });
@@ -494,6 +685,7 @@ class AuthService {
   }
 
   public applyRemoteUserRoles(remoteRolesJson: string | null | undefined, remoteUpdatedAt: number) {
+    if (!this.state.isAuthed) return;
     if (!remoteRolesJson || !remoteRolesJson.trim()) return;
     const localUpdatedAt = getStorageNum(KEY_ROLES_UPDATED_AT, 0);
     if (
@@ -506,17 +698,19 @@ class AuthService {
     }
     const parsed = parseUsersJson(remoteRolesJson);
     if (parsed.length > 0) {
-      this.saveUsersLocally(parsed, remoteUpdatedAt > 0 ? remoteUpdatedAt : Date.now());
+      this.setUsersInMemory(parsed, remoteUpdatedAt > 0 ? remoteUpdatedAt : Date.now(), true);
     }
   }
 
-  // --- Remote app_users REST helpers ---
+  // --- Remote app_users REST helpers (strictly user-authenticated, zero anon fallback) ---
 
   private async fetchRemoteAppUsers(overrideToken?: string): Promise<UserAccount[] | null> {
     if (!this.isSupabaseConfigured()) return null;
+    const authHeader = overrideToken ? `Bearer ${overrideToken}` : this.activeAuthHeader();
+    if (!authHeader) return null;
+
     try {
       const { baseUrl, apiKey } = getSupabaseCredentials();
-      const authHeader = overrideToken ? `Bearer ${overrideToken}` : this.activeAuthHeader();
       const resp = await fetch(`${baseUrl}/rest/v1/app_users?select=email,is_admin&order=email.asc`, {
         method: 'GET',
         headers: {
@@ -527,7 +721,8 @@ class AuthService {
       if (!resp.ok) return null;
       const body = await resp.text();
       return parseUsersJson(body);
-    } catch {
+    } catch (e) {
+      console.warn('Failed fetching remote app_users:', e);
       return null;
     }
   }
@@ -538,9 +733,11 @@ class AuthService {
     overrideToken?: string
   ): Promise<boolean> {
     if (!this.isSupabaseConfigured()) return false;
+    const authHeader = overrideToken ? `Bearer ${overrideToken}` : this.activeAuthHeader();
+    if (!authHeader) return false;
+
     try {
       const { baseUrl, apiKey } = getSupabaseCredentials();
-      const authHeader = overrideToken ? `Bearer ${overrideToken}` : this.activeAuthHeader();
       const resp = await fetch(`${baseUrl}/rest/v1/app_users?on_conflict=email`, {
         method: 'POST',
         headers: {
@@ -555,13 +752,17 @@ class AuthService {
         }),
       });
       return resp.ok;
-    } catch {
+    } catch (e) {
+      console.warn('Failed upserting remote app_user:', e);
       return false;
     }
   }
 
   private async pushRemoteUserDelete(email: string): Promise<boolean> {
     if (!this.isSupabaseConfigured()) return false;
+    const authHeader = this.activeAuthHeader();
+    if (!authHeader) return false;
+
     try {
       const { baseUrl, apiKey } = getSupabaseCredentials();
       const encodedEmail = encodeURIComponent(email.trim().toLowerCase());
@@ -569,19 +770,24 @@ class AuthService {
         method: 'DELETE',
         headers: {
           apikey: apiKey,
-          Authorization: this.activeAuthHeader(),
+          Authorization: authHeader,
         },
       });
       return resp.ok;
-    } catch {
+    } catch (e) {
+      console.warn('Failed deleting remote app_user:', e);
       return false;
     }
   }
 
   public async upsertUser(email: string, isAdmin: boolean) {
-    if (!this.state.isAdmin) return;
+    if (!this.state.isAuthed || !this.state.isAdmin) return;
     const clean = email.trim().toLowerCase();
     if (!isValidEmail(clean)) return;
+    const ok = await this.pushRemoteUserUpsert(clean, isAdmin);
+    if (!ok) {
+      throw new Error('Could not update user role on database (check admin permissions).');
+    }
     const current = [...this.state.registeredUsers];
     const idx = current.findIndex((u) => u.email.toLowerCase() === clean);
     if (idx >= 0) {
@@ -590,30 +796,33 @@ class AuthService {
       current.push({ email: clean, isAdmin });
     }
     const now = Date.now();
-    this.saveUsersLocally(current, now);
+    this.setUsersInMemory(current, now, true);
     this.onRolesChangedListener?.(serializeUsers(current), now);
-    await this.pushRemoteUserUpsert(clean, isAdmin);
   }
 
   public async removeUser(email: string) {
-    if (!this.state.isAdmin) return;
+    if (!this.state.isAuthed || !this.state.isAdmin) return;
     const clean = email.trim().toLowerCase();
+    const ok = await this.pushRemoteUserDelete(clean);
+    if (!ok) {
+      throw new Error('Could not remove user from database (check admin permissions).');
+    }
     const current = this.state.registeredUsers.filter((u) => u.email.toLowerCase() !== clean);
     const now = Date.now();
-    this.saveUsersLocally(current, now);
+    this.setUsersInMemory(current, now, true);
     this.onRolesChangedListener?.(serializeUsers(current), now);
-    await this.pushRemoteUserDelete(clean);
   }
 
   public async setUserAdminRole(email: string, isAdmin: boolean) {
-    if (!this.state.isAdmin) return;
+    if (!this.state.isAuthed || !this.state.isAdmin) return;
     await this.upsertUser(email, isAdmin);
   }
 
   public async syncUsersFromCloud(): Promise<boolean> {
+    if (!this.state.isAuthed) return false;
     const remoteUsers = await this.fetchRemoteAppUsers();
     if (!remoteUsers) return false;
-    this.saveUsersLocally(remoteUsers);
+    this.setUsersInMemory(remoteUsers, Date.now(), true);
     return true;
   }
 
@@ -640,13 +849,14 @@ class AuthService {
           let obj: any = null;
           try {
             obj = JSON.parse(body);
-          } catch {}
+          } catch (e) {
+            console.warn('Refresh response parse notice:', e);
+          }
           const newAccess = String(obj?.access_token || '');
           const newRefresh = String(obj?.refresh_token || '') || currentRefresh;
           if (newAccess) {
             this.saveSessionTokens(newAccess, newRefresh);
             if (obj?.user && isMetadataAdmin(obj.user) && !this.state.isAdmin) {
-              setStorageString(KEY_ADMIN, 'true');
               this.emit({ isAdmin: true });
             }
             return true;
@@ -658,7 +868,8 @@ class AuthService {
           return false;
         }
         return false;
-      } catch {
+      } catch (e) {
+        console.warn('Session refresh network notice:', e);
         return false;
       } finally {
         this.refreshPromise = null;
@@ -669,6 +880,7 @@ class AuthService {
   }
 
   public async refreshCurrentUserRole(): Promise<boolean> {
+    if (!this.state.isAuthed) return false;
     const activeEmail = this.state.currentUserEmail?.trim().toLowerCase();
     if (!activeEmail) return false;
 
@@ -691,10 +903,13 @@ class AuthService {
           if (resp.ok) {
             try {
               userObj = await resp.json();
-            } catch {}
+            } catch (e) {
+              console.warn('User info JSON parse notice:', e);
+            }
           }
           return { code: resp.status, userObj };
-        } catch {
+        } catch (e) {
+          console.warn('User info fetch notice:', e);
           return { code: -1, userObj: null };
         }
       };
@@ -714,6 +929,8 @@ class AuthService {
       } else if (code === 401 || code === 403 || code === 404) {
         sessionRevoked = true;
       }
+    } else if (!token) {
+      sessionRevoked = true;
     }
 
     if (sessionRevoked) {
@@ -723,20 +940,15 @@ class AuthService {
       return false;
     }
 
-    const remoteUsers = await this.fetchRemoteAppUsers();
+    const remoteUsers = await this.fetchRemoteAppUsers(token);
     if (remoteUsers) {
-      this.saveUsersLocally(remoteUsers);
+      this.setUsersInMemory(remoteUsers, Date.now(), false);
       const matched = remoteUsers.find((u) => u.email.toLowerCase() === activeEmail);
       const resolvedAdmin = Boolean(matched?.isAdmin) || metadataAdmin;
-      setStorageString(KEY_ADMIN, String(resolvedAdmin));
       this.emit({ isAdmin: resolvedAdmin });
       return resolvedAdmin;
     } else {
-      const localMatched = this.state.registeredUsers.find(
-        (u) => u.email.toLowerCase() === activeEmail
-      );
-      const resolvedAdmin = Boolean(localMatched?.isAdmin) || metadataAdmin;
-      setStorageString(KEY_ADMIN, String(resolvedAdmin));
+      const resolvedAdmin = metadataAdmin;
       this.emit({ isAdmin: resolvedAdmin });
       return resolvedAdmin;
     }
@@ -744,12 +956,12 @@ class AuthService {
 
   private async resolveAndCompleteSession(
     email: string,
-    accessToken = '',
+    accessToken: string,
     refreshToken = '',
     metadataIsAdmin = false
   ) {
     const clean = email.trim().toLowerCase();
-    const remoteUsers = await this.fetchRemoteAppUsers(accessToken || undefined);
+    const remoteUsers = await this.fetchRemoteAppUsers(accessToken);
 
     let resolvedAdmin = false;
     let updatedUsers: UserAccount[];
@@ -758,10 +970,10 @@ class AuthService {
       const remoteMatch = remoteUsers.find((u) => u.email.toLowerCase() === clean);
       resolvedAdmin = Boolean(remoteMatch?.isAdmin) || metadataIsAdmin;
       if (!remoteMatch) {
-        await this.pushRemoteUserUpsert(clean, metadataIsAdmin, accessToken || undefined);
+        await this.pushRemoteUserUpsert(clean, metadataIsAdmin, accessToken);
         updatedUsers = [...remoteUsers, { email: clean, isAdmin: resolvedAdmin }];
       } else if (metadataIsAdmin && !remoteMatch.isAdmin) {
-        await this.pushRemoteUserUpsert(clean, true, accessToken || undefined);
+        await this.pushRemoteUserUpsert(clean, true, accessToken);
         updatedUsers = remoteUsers.map((u) =>
           u.email.toLowerCase() === clean ? { email: clean, isAdmin: true } : u
         );
@@ -769,35 +981,30 @@ class AuthService {
         updatedUsers = remoteUsers;
       }
     } else {
-      const localList = this.state.registeredUsers;
-      const localMatch = localList.find((u) => u.email.toLowerCase() === clean);
-      resolvedAdmin = Boolean(localMatch?.isAdmin) || metadataIsAdmin;
-      updatedUsers = localMatch
-        ? localList
-        : [...localList, { email: clean, isAdmin: resolvedAdmin }];
+      resolvedAdmin = metadataIsAdmin;
+      updatedUsers = [{ email: clean, isAdmin: resolvedAdmin }];
     }
 
-    const now = Date.now();
-    this.saveUsersLocally(updatedUsers, now);
-    this.onRolesChangedListener?.(serializeUsers(updatedUsers), now);
-
-    if (accessToken) {
-      this.saveSessionTokens(accessToken, refreshToken);
-    }
-    setStorageString(KEY_AUTHED, 'true');
-    setStorageString(KEY_ADMIN, String(resolvedAdmin));
-    setStorageString(KEY_CURRENT_USER_EMAIL, clean);
+    this.saveSessionTokens(accessToken, refreshToken);
     setStorageString(KEY_LAST_EMAIL, clean);
     removeStorage(KEY_PENDING_SIGNUP_EMAIL);
 
     this.clearOtpTimer();
     this.clearResendCooldown();
+
+    const now = Date.now();
     this.emit({
       pendingVerificationEmail: null,
       currentUserEmail: clean,
       isAdmin: resolvedAdmin,
       isAuthed: true,
+      isVerifyingSession: false,
+      registeredUsers: updatedUsers,
     });
+    setStorageNum(KEY_ROLES_UPDATED_AT, now);
+    if (resolvedAdmin) {
+      this.onRolesChangedListener?.(serializeUsers(updatedUsers), now);
+    }
   }
 
   // --- Sign In / Sign Up / Verification / Recovery ---
@@ -839,7 +1046,9 @@ class AuthService {
         let obj: any = null;
         try {
           obj = JSON.parse(respBody);
-        } catch {}
+        } catch (e) {
+          console.warn('Sign in JSON parse notice:', e);
+        }
         const accessToken = String(obj?.access_token || '');
         const refreshToken = String(obj?.refresh_token || '');
         const userObj = obj?.user;
@@ -920,7 +1129,9 @@ class AuthService {
         let obj: any = null;
         try {
           obj = JSON.parse(respBody);
-        } catch {}
+        } catch (e) {
+          console.warn('Sign up JSON parse notice:', e);
+        }
         const userObj = obj?.user ?? obj;
         const accessToken = String(obj?.access_token || '');
         const refreshToken = String(obj?.refresh_token || '');
@@ -943,21 +1154,6 @@ class AuthService {
             isMetadataAdmin(userObj)
           );
           return { ok: true, message: 'Account created & signed in!' };
-        }
-
-        const remoteUsers = await this.fetchRemoteAppUsers();
-        const remoteMatch = remoteUsers?.find((u) => u.email.toLowerCase() === clean);
-        if (remoteUsers && !remoteMatch) {
-          await this.pushRemoteUserUpsert(clean, false);
-        }
-
-        if (remoteUsers) {
-          const list = remoteMatch
-            ? remoteUsers
-            : [...remoteUsers, { email: clean, isAdmin: false }];
-          this.saveUsersLocally(list);
-        } else if (!this.state.registeredUsers.some((u) => u.email.toLowerCase() === clean)) {
-          this.saveUsersLocally([...this.state.registeredUsers, { email: clean, isAdmin: false }]);
         }
 
         setStorageString(KEY_LAST_EMAIL, clean);
@@ -1023,7 +1219,9 @@ class AuthService {
         let obj: any = null;
         try {
           obj = JSON.parse(body);
-        } catch {}
+        } catch (e) {
+          console.warn('OTP verify JSON parse notice:', e);
+        }
         const userObj = obj?.user;
         const accessToken = String(obj?.access_token || '');
         const refreshToken = String(obj?.refresh_token || '');
@@ -1209,7 +1407,9 @@ class AuthService {
       let verifyJson: any = null;
       try {
         verifyJson = JSON.parse(verifyBody);
-      } catch {}
+      } catch (e) {
+        console.warn('Reset verify JSON parse notice:', e);
+      }
       const recoveryToken = String(verifyJson?.access_token || '');
       const recoveryRefresh = String(verifyJson?.refresh_token || '');
       const userObj = verifyJson?.user;
@@ -1271,8 +1471,8 @@ class AuthService {
 
     try {
       const { baseUrl, apiKey } = getSupabaseCredentials();
-      const sendPut = async (bearer: string) => {
-        return fetch(`${baseUrl}/auth/v1/user`, {
+      const sendPut = async (bearer: string) =>
+        fetch(`${baseUrl}/auth/v1/user`, {
           method: 'PUT',
           headers: {
             apikey: apiKey,
@@ -1281,7 +1481,6 @@ class AuthService {
           },
           body: JSON.stringify({ email: cleanNew }),
         });
-      };
 
       let resp = await sendPut(token);
       if (resp.status === 401 && (await this.refreshSession())) {
@@ -1355,7 +1554,9 @@ class AuthService {
         let obj: any = null;
         try {
           obj = JSON.parse(body);
-        } catch {}
+        } catch (e) {
+          console.warn('Email change JSON parse notice:', e);
+        }
         const newToken = String(obj?.access_token || '');
         const newRefresh = String(obj?.refresh_token || '');
         this.resetAuthFailures();
@@ -1396,17 +1597,16 @@ class AuthService {
       { email: cleanNew, isAdmin: existingRole },
     ];
     const now = Date.now();
-    this.saveUsersLocally(updatedList, now);
-    this.onRolesChangedListener?.(serializeUsers(updatedList), now);
+    this.setUsersInMemory(updatedList, now, false);
 
     if (newAccessToken) {
       this.saveSessionTokens(newAccessToken, newRefreshToken);
     }
-    setStorageString(KEY_CURRENT_USER_EMAIL, cleanNew);
     setStorageString(KEY_LAST_EMAIL, cleanNew);
     this.clearOtpTimer();
     this.clearResendCooldown();
     this.emit({ currentUserEmail: cleanNew, isAdmin: existingRole });
+    this.onRolesChangedListener?.(serializeUsers(updatedList), now);
 
     if (this.isSupabaseConfigured()) {
       const tok = newAccessToken || this.activeAccessToken() || undefined;
@@ -1510,7 +1710,9 @@ class AuthService {
       let verifyJson: any = null;
       try {
         verifyJson = JSON.parse(verifyBody);
-      } catch {}
+      } catch (e) {
+        console.warn('Delete account verify parse notice:', e);
+      }
       const userAccessToken = String(verifyJson?.access_token || '') || this.activeAccessToken();
       if (!userAccessToken) {
         return {
@@ -1526,7 +1728,7 @@ class AuthService {
           apikey: apiKey,
           Authorization: `Bearer ${userAccessToken}`,
         },
-      }).catch(() => {});
+      }).catch((e) => console.warn('Cleanup app_users warning:', e));
 
       // 2. Execute RPC delete_user_account
       const rpcResp = await fetch(`${baseUrl}/rest/v1/rpc/delete_user_account`, {
@@ -1563,11 +1765,8 @@ class AuthService {
     const clean = deletedEmail.trim().toLowerCase();
     const remaining = this.state.registeredUsers.filter((u) => u.email.toLowerCase() !== clean);
     const now = Date.now();
-    this.saveUsersLocally(remaining, now);
     this.onRolesChangedListener?.(serializeUsers(remaining), now);
-    removeStorage(KEY_LAST_EMAIL);
-    removeStorage(KEY_PENDING_SIGNUP_EMAIL);
-    this.logout(false);
+    this.logout(false, false);
     this.emit({
       pendingVerificationEmail: null,
       deepLinkError: null,
@@ -1577,21 +1776,25 @@ class AuthService {
     });
   }
 
-  public logout(revokeServer = true) {
+  public logout(revokeServer = true, keepLastEmail = true) {
     const tokenToRevoke = this.activeAccessToken();
     this.clearOtpTimer();
     this.clearResendCooldown();
     this.clearSessionTokens();
 
-    setStorageString(KEY_AUTHED, 'false');
-    setStorageString(KEY_ADMIN, 'false');
-    removeStorage(KEY_CURRENT_USER_EMAIL);
+    // SECURITY (Task 9): Wipe all hardware_* cached data from storage on sign-out
+    clearHardwareWebStorage(keepLastEmail);
 
     this.emit({
       currentUserEmail: null,
       isAdmin: false,
       isAuthed: false,
+      isVerifyingSession: false,
+      registeredUsers: [],
+      pendingVerificationEmail: null,
     });
+
+    this.onSignedOutListener?.();
 
     if (revokeServer && this.isSupabaseConfigured() && tokenToRevoke) {
       const { baseUrl, apiKey } = getSupabaseCredentials();
@@ -1603,14 +1806,14 @@ class AuthService {
           'Content-Type': 'application/json',
         },
         body: '{}',
-      }).catch(() => {});
+      }).catch((e) => console.warn('Server logout revoke notice:', e));
     }
   }
 
   public forceSessionExpiredSignOut(
     reason = 'Your session has expired. Please sign in again.'
   ) {
-    this.logout(false);
+    this.logout(false, true);
     this.emit({
       deepLinkMessage: null,
       deepLinkError: reason,

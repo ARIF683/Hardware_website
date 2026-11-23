@@ -105,9 +105,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
     try {
       const url = await supabaseService.uploadImageToCloudinary(file);
       await updateStoreBanner(url);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Banner upload error", err);
-      showToast("Failed to upload cover banner");
+      showToast(err?.message || "Image upload failed, please retry");
     } finally {
       setIsUploadingBanner(false);
       if (e.target) e.target.value = "";
@@ -122,9 +122,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       const url = await supabaseService.uploadImageToCloudinary(file);
       setLogoImgError(false);
       await updateStoreLogo(url);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Logo upload error", err);
-      showToast("Failed to upload store logo");
+      showToast(err?.message || "Image upload failed, please retry");
     } finally {
       setIsUploadingLogo(false);
       if (e.target) e.target.value = "";
@@ -161,11 +161,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         >
           <input ref={bannerInputRef} type="file" accept="image/*" className="hidden" onChange={handleBannerUpload} />
           <img
-            src={bannerUrl || "/store_cover_banner.jpg"}
+            src={bannerUrl || "/store_cover_banner.webp"}
             alt="Store Cover Banner"
             className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
             onError={(e) => {
-              (e.target as HTMLImageElement).src = '/logos/img_store_cover_banner_1791306669322.jpg';
+              (e.target as HTMLImageElement).src = '/logos/img_store_cover_banner_1791306669322.webp';
             }}
           />
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-950/20 to-transparent" />

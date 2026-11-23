@@ -108,7 +108,9 @@ export const AnnouncementStudioModal: React.FC<{
       Object.values(previewObjectUrls).forEach((u) => {
         try {
           URL.revokeObjectURL(u);
-        } catch {}
+        } catch (e) {
+          console.warn('Could not revoke preview URL:', e);
+        }
       });
     };
   }, [previewObjectUrls]);
@@ -184,7 +186,9 @@ export const AnnouncementStudioModal: React.FC<{
         if (ki === idx) {
           try {
             URL.revokeObjectURL(v);
-          } catch {}
+          } catch (e) {
+            console.warn('Could not revoke deleted preview URL:', e);
+          }
         } else if (ki < idx) {
           next[ki] = v;
         } else if (ki > idx) {
@@ -840,7 +844,9 @@ export const AnnouncementStudioModal: React.FC<{
                                     if (prev[idx]) {
                                       try {
                                         URL.revokeObjectURL(prev[idx]);
-                                      } catch {}
+                                      } catch (e) {
+                                        console.warn('Could not revoke replaced preview URL:', e);
+                                      }
                                     }
                                     return { ...prev, [idx]: objUrl };
                                   });
@@ -861,7 +867,9 @@ export const AnnouncementStudioModal: React.FC<{
                                     if (prev[idx]) {
                                       try {
                                         URL.revokeObjectURL(prev[idx]);
-                                      } catch {}
+                                      } catch (e) {
+                                        console.warn('Could not revoke cleared preview URL:', e);
+                                      }
                                     }
                                     const copy = { ...prev };
                                     delete copy[idx];
